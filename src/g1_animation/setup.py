@@ -21,14 +21,10 @@ setup(
     maintainer_email='you@example.com',
     description='G1 EDU+ animation pipeline',
     license='MIT',
-    options={
-        'build_scripts': {
-            'executable': '/home/nacho/g1_ws/venv/bin/python3',
-        }
-    },
     entry_points={
         'console_scripts': [
             'animation_publisher = g1_animation.animation_publisher:main',
+            'animation_cli       = g1_animation.animation_cli:main',
             'robot_publisher     = g1_animation.robot_publisher:main',
         ],
     },

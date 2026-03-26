@@ -1,106 +1,191 @@
 #!/usr/bin/env python3
 """
 G1 Animation Publisher
-Publishes a JointTrajectory to /upper_body_trajectory for RViz preview.
-Run alongside G1Pilot's robot_state_publisher for visualization.
+- Idles at neutral pose
+- Plays a named animation clip on demand via ROS2 service
+- Loops or plays once depending on the request
+- Publishes /joint_states for RViz preview
 """
 import rclpy
 from rclpy.node import Node
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from builtin_interfaces.msg import Duration
-from .keyframes import UPPER_BODY_JOINTS, WAVE_ANIMATION
+from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
+from std_msgs.msg import String
+
+from .keyframes import UPPER_BODY_JOINTS, ANIMATIONS, NEUTRAL
 
 
 class AnimationPublisher(Node):
+
     def __init__(self):
         super().__init__('animation_publisher')
-        self.declare_parameter('animation', 'wave')
-        self.declare_parameter('loop', True)
 
-        self.pub = self.create_publisher(
-            JointTrajectory,
-            '/upper_body_trajectory',
-            10
-        )
-
-        # Also publish joint_states for RViz robot model update
-        from sensor_msgs.msg import JointState
+        # --- publishers ---
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
 
-        self._keyframes = WAVE_ANIMATION
-        self._frame_idx = 0
-        self._loop = self.get_parameter('loop').value
-        self._start_time = self.get_clock().now()
+        # Publishes the name of the currently playing clip (useful for monitoring)
+        self.status_pub = self.create_publisher(String, '/animation/status', 10)
 
-        # Timer fires at 50 Hz to update joint_states for smooth RViz preview
-        self.timer = self.create_timer(0.02, self.tick)
-        self.get_logger().info("Animation publisher started. Publishing to /upper_body_trajectory")
+        # --- services (one per registered animation) ---
+        self._animation_services = {}
+        for name in ANIMATIONS:
+            srv = self.create_service(
+                Trigger,
+                f'/animation/play/{name}',
+                lambda req, res, n=name: self._handle_play(req, res, n),
+            )
+            self._animation_services[name] = srv
+            self.get_logger().info(f"Registered service: /animation/play/{name}")
 
-    def tick(self):
-        """Interpolate between keyframes and publish joint states."""
-        from sensor_msgs.msg import JointState
-        import math
+        # Stop service — returns to neutral immediately
+        self.create_service(Trigger, '/animation/stop', self._handle_stop)
 
-        elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
-        total_duration = self._keyframes[-1]["time"]
+        # --- state ---
+        self._current_clip   = None      # name of playing clip
+        self._keyframes      = None      # active keyframe list
+        self._start_time     = None
+        self._loop           = False
+        self._playing        = False
 
-        if elapsed > total_duration:
-            if self._loop:
-                self._start_time = self.get_clock().now()
-                elapsed = 0.0
-            else:
+        # Start at neutral
+        self._current_positions = list(NEUTRAL)
+
+        # 50 Hz tick
+        self.timer = self.create_timer(0.02, self._tick)
+        self.get_logger().info("Animation publisher ready. Send a service call to play a clip.")
+        self.get_logger().info("Available clips: " + ", ".join(ANIMATIONS.keys()))
+
+    # ------------------------------------------------------------------
+    # Service handlers
+    # ------------------------------------------------------------------
+
+    def _handle_play(self, request, response, name: str):
+        """Blend from current pose into the first frame of the clip, then play."""
+        target_first_frame = ANIMATIONS[name][0]["positions"]
+        blend_then_play = [
+            {"time": 0.0,  "positions": list(self._current_positions)},
+            {"time": 0.5, "positions": target_first_frame},
+        ] + [
+            {"time": kf["time"] + 0.5, "positions": kf["positions"]}
+            for kf in ANIMATIONS[name]
+        ]
+        self._current_clip = name
+        self._keyframes    = blend_then_play
+        self._start_time   = self.get_clock().now()
+        self._loop         = False
+        self._playing      = True
+
+        # Validate
+        for i, kf in enumerate(self._keyframes):
+            if len(kf["positions"]) != len(UPPER_BODY_JOINTS):
+                self.get_logger().error(
+                    f"[{name}] keyframe {i}: expected {len(UPPER_BODY_JOINTS)} "
+                    f"positions, got {len(kf['positions'])}"
+                )
+                self._stop()
+                break
+
+        response.success = True
+        response.message = f"Playing '{name}'"
+        self.get_logger().info(response.message)
+        return response
+
+    def _handle_stop(self, request, response):
+        """Stop current animation and smoothly blend back to neutral."""
+        self._start_blend_to_neutral(duration=1.0)
+        response.success = True
+        response.message = "Stopped — blending to neutral"
+        self.get_logger().info(response.message)
+        return response
+    
+    def _start_blend_to_neutral(self, duration: float = 1.0):
+        """Build a one-segment clip from current pose to neutral and play it."""
+        blend_clip = [
+            {"time": 0.0, "positions": list(self._current_positions)},
+            {"time": duration, "positions": list(NEUTRAL)},
+        ]
+        self._current_clip = "blend_to_neutral"
+        self._keyframes    = blend_clip
+        self._start_time   = self.get_clock().now()
+        self._loop         = False
+        self._playing      = True
+
+    # ------------------------------------------------------------------
+    # Playback control
+    # ------------------------------------------------------------------
+
+    def _start_clip(self, name: str, loop: bool = False):
+        self._current_clip = name
+        self._keyframes    = ANIMATIONS[name]
+        self._start_time   = self.get_clock().now()
+        self._loop         = loop
+        self._playing      = True
+
+        # Validate keyframe lengths up front
+        for i, kf in enumerate(self._keyframes):
+            if len(kf["positions"]) != len(UPPER_BODY_JOINTS):
+                self.get_logger().error(
+                    f"[{name}] keyframe {i}: expected {len(UPPER_BODY_JOINTS)} "
+                    f"positions, got {len(kf['positions'])}"
+                )
+                self._stop()
                 return
 
+    def _stop(self):
+        self._playing      = False
+        self._current_clip = None
+        self._keyframes    = None
+
+    # ------------------------------------------------------------------
+    # Interpolation
+    # ------------------------------------------------------------------
+
+    def _interpolate(self, elapsed: float) -> list:
+        kfs = self._keyframes
+        total = kfs[-1]["time"]
+
+        if elapsed >= total:
+            if self._loop:
+                elapsed = elapsed % total
+            else:
+                self._stop()
+                return list(kfs[-1]["positions"])  # hold last frame
+
         # Find surrounding keyframes
-        kf_before = self._keyframes[0]
-        kf_after = self._keyframes[-1]
-        for i in range(len(self._keyframes) - 1):
-            if self._keyframes[i]["time"] <= elapsed <= self._keyframes[i+1]["time"]:
-                kf_before = self._keyframes[i]
-                kf_after = self._keyframes[i+1]
+        kf0, kf1 = kfs[0], kfs[-1]
+        for i in range(len(kfs) - 1):
+            if kfs[i]["time"] <= elapsed <= kfs[i + 1]["time"]:
+                kf0, kf1 = kfs[i], kfs[i + 1]
                 break
-                
-        for i, kf in enumerate(self._keyframes):
-           if len(kf["positions"]) != len(UPPER_BODY_JOINTS):
-               self.get_logger().error(
-               f"Keyframe {i} length mismatch: "
-               f"{len(kf['positions'])} vs {len(UPPER_BODY_JOINTS)}"
-           )
 
-        # Linear interpolation
-        seg_duration = kf_after["time"] - kf_before["time"]
-        if seg_duration == 0:
-            t = 0.0
-        else:
-            t = (elapsed - kf_before["time"]) / seg_duration
+        seg = kf1["time"] - kf0["time"]
+        t   = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
 
-        positions = [
-            kf_before["positions"][j] + t * (kf_after["positions"][j] - kf_before["positions"][j])
+        return [
+            kf0["positions"][j] + t * (kf1["positions"][j] - kf0["positions"][j])
             for j in range(len(UPPER_BODY_JOINTS))
         ]
 
-        # Publish JointState for RViz
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    def _tick(self):
+        if self._playing:
+            elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
+            self._current_positions = self._interpolate(elapsed)
+
+            # Publish status
+            msg = String()
+            msg.data = self._current_clip or "idle"
+            self.status_pub.publish(msg)
+
+        # Always publish joint states (idle = neutral, playing = interpolated)
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
-        js.name = UPPER_BODY_JOINTS
-        js.position = positions
+        js.name         = UPPER_BODY_JOINTS
+        js.position     = self._current_positions
         self.js_pub.publish(js)
-
-    def publish_full_trajectory(self):
-        """Publish the complete trajectory (used by loco_client on real robot)."""
-        msg = JointTrajectory()
-        msg.joint_names = UPPER_BODY_JOINTS
-        for kf in self._keyframes:
-            pt = JointTrajectoryPoint()
-            pt.positions = kf["positions"]
-            t = kf["time"]
-            pt.time_from_start = Duration(
-                sec=int(t),
-                nanosec=int((t % 1) * 1_000_000_000)
-            )
-            msg.points.append(pt)
-        self.pub.publish(msg)
-        self.get_logger().info(f"Full trajectory published ({len(self._keyframes)} keyframes)")
 
 
 def main(args=None):
@@ -112,7 +197,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

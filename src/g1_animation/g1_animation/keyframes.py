@@ -1,5 +1,4 @@
-# G1 EDU+ upper body joint names (29 DOF arms + waist)
-# Adjust to match your URDF joint names exactly
+# G1 EDU+ upper body joint names (17 DOF)
 UPPER_BODY_JOINTS = [
     "waist_yaw_joint",
     "waist_roll_joint",
@@ -20,32 +19,29 @@ UPPER_BODY_JOINTS = [
     "right_wrist_yaw_joint",
 ]
 
-# Keyframe format: {"time": seconds, "positions": [joint values in radians]}
-# Positions must match UPPER_BODY_JOINTS order
+NEUTRAL = [0.0, 0.0, 0.0,
+           0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0,
+           0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0]
 
 WAVE_ANIMATION = [
 
     # Neutral
-    {"time": 0.0, "positions": [
-        0.0,  0.0,  0.0,   # base + waist
-        0.2,  0.0,  0.0, -0.3,   # left arm relaxed
-        0.0,  0.0,  0.0,
-        0.2,  0.0,  0.0, -0.3,   # right arm relaxed
-        0.0,  0.0,  0.0
-    ]},
+    {"time": 0.0, "positions": NEUTRAL},
 
     # Raise arms half way
     {'time': 2, 'positions': [0.0, 0.0, 0.0, -0.0003, 1.8222, 1.6326, 0.0985, 0.0, 0.0, 0.0, -0.0003, -1.7773, -1.4169, -0.0004, 0.0, 0.0, 0.0]},
         
-    # Raise arms half way
+    # Hold
     {'time': 4, 'positions': [0.0, 0.0, 0.0, -0.0003, 1.8222, 1.6326, 0.0985, 0.0, 0.0, 0.0, -0.0003, -1.7773, -1.4169, -0.0004, 0.0, 0.0, 0.0]},
         
     # Return to neutral
-    {"time": 6, "positions": [
-        0.0,  0.0,  0.0,
-        0.2,  0.0,  0.0, -0.3,
-        0.0,  0.0,  0.0,
-        0.2,  0.0,  0.0, -0.3,
-        0.0,  0.0,  0.0
-    ]},
+    {"time": 6, "positions": NEUTRAL},
+
 ]
+
+# Registry — add new clips here, they become available as service commands
+ANIMATIONS = {
+    "wave":    WAVE_ANIMATION,
+    "neutral": [{"time": 0.0, "positions": NEUTRAL},
+                {"time": 0.5, "positions": NEUTRAL}],
+}
