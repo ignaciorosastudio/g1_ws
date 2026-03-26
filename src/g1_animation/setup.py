@@ -26,6 +26,7 @@ setup(
             'animation_publisher = g1_animation.animation_publisher:main',
             'animation_cli       = g1_animation.animation_cli:main',
             'robot_publisher     = g1_animation.robot_publisher:main',
+            'pose_capture = g1_animation.pose_capture:main',
         ],
     },
 )
