@@ -21,8 +21,9 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.core.channel import ChannelSubscriber
+from unitree_sdk2py.utils.crc import CRC
 
-from .keyframes import UPPER_BODY_JOINTS, WAVE_ANIMATION
+from .keyframes import UPPER_BODY_JOINTS, ANIMATIONS
 
 
 # G1 joint index mapping (SDK2 ordering for upper body)
@@ -51,6 +52,17 @@ G1_JOINT_INDEX = {
 KP = 60.0   # position gain
 KD = 1.5    # damping gain
 
+# Maximum joint speed (rad/s) — limits how fast any joint can move per tick.
+# At 200 Hz each tick is 5 ms, so 0.5 rad/s → max 0.0025 rad per tick.
+# Increase to allow faster animations; decrease for a slower, safer startup.
+MAX_JOINT_VEL = 0.5   # rad/s
+CONTROL_DT    = 0.005 # must match timer period
+
+# arm_sdk weight register — motor_cmd[29].q controls blending between
+# the locomotion controller's arm swing (0.0) and our commands (1.0).
+WEIGHT_JOINT       = 29
+WEIGHT_RAMP_STEPS  = 200   # steps to ramp weight down on shutdown (~1 s at 5 ms)
+
 
 class RobotPublisher(Node):
     def __init__(self):
@@ -59,10 +71,25 @@ class RobotPublisher(Node):
         self.declare_parameter('network_interface', 'enp3s0')
         self.declare_parameter('loop', True)
         self.declare_parameter('dry_run', True)   # True = print only, don't send
+        self.declare_parameter('animation', 'hands')
+        self.declare_parameter('mode', 'damping')  # 'damping' or 'walking'
 
-        self._iface = self.get_parameter('network_interface').value
-        self._loop  = self.get_parameter('loop').value
-        self._dry   = self.get_parameter('dry_run').value
+        self._iface     = self.get_parameter('network_interface').value
+        self._loop      = self.get_parameter('loop').value
+        self._dry       = self.get_parameter('dry_run').value
+        anim_name       = self.get_parameter('animation').value
+        self._mode      = self.get_parameter('mode').value
+
+        if self._mode not in ('damping', 'walking'):
+            raise ValueError(f"Invalid mode '{self._mode}'. Use 'damping' or 'walking'.")
+
+        if anim_name not in ANIMATIONS:
+            raise ValueError(
+                f"Unknown animation '{anim_name}'. "
+                f"Available: {', '.join(ANIMATIONS.keys())}"
+            )
+
+        self._state = None
 
         if self._dry:
             self.get_logger().warn(
@@ -75,9 +102,19 @@ class RobotPublisher(Node):
                 "Make sure the robot is in Debug/Damping mode!"
             )
             self._init_sdk()
-
         self._start_time = time.time()
-        self._keyframes  = WAVE_ANIMATION
+        self._keyframes  = ANIMATIONS[anim_name]
+        self.get_logger().info(f"Animation: '{anim_name}'")
+
+        # Seed rate-limiter from live state so the first move is smooth.
+        # Falls back to the first keyframe in dry-run mode.
+        if self._state is not None:
+            self._prev_positions = [
+                self._state.motor_state[G1_JOINT_INDEX[j]].q
+                for j in UPPER_BODY_JOINTS
+            ]
+        else:
+            self._prev_positions = list(self._keyframes[0]["positions"])
 
         # 200 Hz control loop (Unitree expects high-freq commands)
         self.timer = self.create_timer(0.005, self.tick)
@@ -85,11 +122,11 @@ class RobotPublisher(Node):
     def _init_sdk(self):
         """Initialize Unitree SDK2 channel."""
         ChannelFactoryInitialize(0, self._iface)
+        self._crc = CRC()
         self._cmd_pub = ChannelPublisher("rt/lowcmd", LowCmd_)
         self._cmd_pub.Init()
 
         # Subscribe to state so we can read current positions before moving
-        self._state = None
         sub = ChannelSubscriber("rt/lowstate", LowState_)
         sub.Init(self._state_callback, 10)
         self.get_logger().info(f"SDK2 initialized on interface: {self._iface}")
@@ -133,7 +170,15 @@ class RobotPublisher(Node):
 
     def tick(self):
         elapsed = time.time() - self._start_time
-        positions = self._interpolate(elapsed)
+        target = self._interpolate(elapsed)
+
+        # Clamp each joint's step to MAX_JOINT_VEL * dt
+        max_delta = MAX_JOINT_VEL * CONTROL_DT
+        positions = []
+        for prev, tgt in zip(self._prev_positions, target):
+            delta = max(-max_delta, min(max_delta, tgt - prev))
+            positions.append(prev + delta)
+        self._prev_positions = positions
 
         if self._dry:
             # Just log — useful for verifying indices before going live
@@ -144,8 +189,8 @@ class RobotPublisher(Node):
 
         # Build LowCmd
         cmd = unitree_hg_msg_dds__LowCmd_()
-        cmd.mode_pr = 0   # position+velocity mode
-        cmd.mode_machine = 0
+        cmd.mode_pr = 0   # PR mode (series joints)
+        cmd.mode_machine = self._state.mode_machine  # must mirror robot state
 
         for i, joint_name in enumerate(UPPER_BODY_JOINTS):
             idx = G1_JOINT_INDEX.get(joint_name)
@@ -158,6 +203,7 @@ class RobotPublisher(Node):
             cmd.motor_cmd[idx].kp   = KP
             cmd.motor_cmd[idx].kd   = KD
 
+        cmd.crc = self._crc.Crc(cmd)
         self._cmd_pub.Write(cmd)
 
 def main(args=None):

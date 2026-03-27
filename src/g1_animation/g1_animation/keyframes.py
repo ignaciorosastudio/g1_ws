@@ -47,10 +47,66 @@ WAVE_ARMS = [
     {"time": 4.0, "positions": NEUTRAL},
 ]
 
+# Right arm wave: raise arm, oscillate wrist pitch to wave
+WAVE_RIGHT = [
+    {"time": 0.0, "positions": NEUTRAL},
+    # Raise right arm: shoulder roll out, elbow bent up
+    {"time": 1.5, "positions": [0.0, 0.0, 0.0,  0.2,  0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, -1.2, 0.0,  1.5, 0.0,  0.0, 0.0]},
+    # Wave 1 — wrist pitch forward
+    {"time": 2.0, "positions": [0.0, 0.0, 0.0,  0.2,  0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, -1.2, 0.0,  1.5, 0.0,  0.6, 0.0]},
+    # Wave 2 — wrist pitch back
+    {"time": 2.5, "positions": [0.0, 0.0, 0.0,  0.2,  0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, -1.2, 0.0,  1.5, 0.0, -0.6, 0.0]},
+    # Wave 3
+    {"time": 3.0, "positions": [0.0, 0.0, 0.0,  0.2,  0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, -1.2, 0.0,  1.5, 0.0,  0.6, 0.0]},
+    # Wave 4
+    {"time": 3.5, "positions": [0.0, 0.0, 0.0,  0.2,  0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, -1.2, 0.0,  1.5, 0.0, -0.6, 0.0]},
+    # Return to neutral
+    {"time": 5.0, "positions": NEUTRAL},
+]
+
+# Both arms pitch forward, elbows extended — tests shoulder pitch symmetry
+REACH_FORWARD = [
+    {"time": 0.0, "positions": NEUTRAL},
+    # Arms sweep forward
+    {"time": 2.0, "positions": [0.0, 0.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    # Hold
+    {"time": 3.0, "positions": [0.0, 0.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    # Return
+    {"time": 5.0, "positions": NEUTRAL},
+]
+
+# Waist yaw left then right — isolates the waist_yaw_joint
+TWIST = [
+    {"time": 0.0, "positions": NEUTRAL},
+    # Rotate left
+    {"time": 1.5, "positions": [ 1.2, 0.0, 0.0,  0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0]},
+    # Rotate right
+    {"time": 3.0, "positions": [-1.2, 0.0, 0.0,  0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0,  0.2, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0]},
+    # Return
+    {"time": 4.5, "positions": NEUTRAL},
+]
+
+# Arms cross at chest — tests shoulder pitch, inward roll, and elbow flex together.
+# Elbows kept at 0.6 rad (not fully bent) and pitch limited to -0.5 to avoid
+# forearm-to-forearm self-collision in front of the torso.
+CROSS = [
+    {"time": 0.0, "positions": NEUTRAL},
+    # Pitch both arms forward, roll inward, elbows lightly bent
+    {"time": 2.0, "positions": [0.0, 0.0, 0.0, -0.5, -0.3, 0.0, 0.6, 0.0, 0.0, 0.0, -0.5, 0.3, 0.0, 0.6, 0.0, 0.0, 0.0]},
+    # Hold
+    {"time": 3.5, "positions": [0.0, 0.0, 0.0, -0.5, -0.3, 0.0, 0.6, 0.0, 0.0, 0.0, -0.5, 0.3, 0.0, 0.6, 0.0, 0.0, 0.0]},
+    # Return
+    {"time": 5.0, "positions": NEUTRAL},
+]
+
 # Registry — add new clips here, they become available as service commands
 ANIMATIONS = {
-    "hands":    HANDS_UP,
+    "hands":   HANDS_UP,
     "arms":    WAVE_ARMS,
+    "wave":    WAVE_RIGHT,
+    "reach":   REACH_FORWARD,
+    "twist":   TWIST,
+    "cross":   CROSS,
     "neutral": [{"time": 0.0, "positions": NEUTRAL},
                 {"time": 0.5, "positions": NEUTRAL}],
 }

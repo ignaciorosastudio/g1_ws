@@ -6,7 +6,7 @@
   <Domain id="any">
     <General>
       <Interfaces>
-        <NetworkInterface name="wlp48s0" priority="default" multicast="default"/>
+        <NetworkInterface name="enp46s0"/>
       </Interfaces>
       <AllowMulticast>default</AllowMulticast>
       <MaxMessageSize>65500B</MaxMessageSize>

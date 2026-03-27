@@ -13,6 +13,8 @@ def generate_launch_description():
                               description='Print commands only, do not send to robot'),
         DeclareLaunchArgument('loop', default_value='true',
                               description='Loop the animation'),
+        DeclareLaunchArgument('animation', default_value='hands',
+                              description='Animation to play (hands/arms/wave/reach/twist/cross/neutral)'),
 
         Node(
             package='g1_animation',
@@ -22,6 +24,7 @@ def generate_launch_description():
                 'network_interface': LaunchConfiguration('network_interface'),
                 'dry_run':           LaunchConfiguration('dry_run'),
                 'loop':              LaunchConfiguration('loop'),
+                'animation':         LaunchConfiguration('animation'),
             }],
             output='screen',
         ),
