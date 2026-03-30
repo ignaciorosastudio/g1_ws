@@ -184,6 +184,10 @@ class AnimationPublisher(Node):
         seg = kf1["time"] - kf0["time"]
         t   = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
 
+        # Smoothstep easing — eliminates velocity snaps at keyframe boundaries
+        # t goes 0->1, output accelerates then decelerates
+        t = t * t * (3.0 - 2.0 * t)
+
         return [
             kf0["positions"][j] + t * (kf1["positions"][j] - kf0["positions"][j])
             for j in range(len(UPPER_BODY_JOINTS))

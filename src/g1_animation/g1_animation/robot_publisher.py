@@ -201,22 +201,30 @@ class RobotPublisher(Node):
                 self.get_logger().info(f"Playback speed: {self._speed:.2f}x")
         return SetParametersResult(successful=True)
 
-    def _interpolate(self, elapsed: float) -> list[float]:
-        """Linear interpolation between keyframes."""
-        total = self._keyframes[-1]["time"]
-        if elapsed > total:
-            elapsed = elapsed % total if self._loop else total
+    def _interpolate(self, elapsed: float) -> list:
+        kfs = self._keyframes
+        total = kfs[-1]["time"]
 
-        kf0 = self._keyframes[0]
-        kf1 = self._keyframes[-1]
-        for i in range(len(self._keyframes) - 1):
-            if self._keyframes[i]["time"] <= elapsed <= self._keyframes[i+1]["time"]:
-                kf0 = self._keyframes[i]
-                kf1 = self._keyframes[i+1]
+        if elapsed >= total:
+            if self._loop:
+                elapsed = elapsed % total
+            else:
+                self._stop()
+                return list(kfs[-1]["positions"])
+
+        # Find surrounding keyframes
+        kf0, kf1 = kfs[0], kfs[-1]
+        for i in range(len(kfs) - 1):
+            if kfs[i]["time"] <= elapsed <= kfs[i + 1]["time"]:
+                kf0, kf1 = kfs[i], kfs[i + 1]
                 break
 
         seg = kf1["time"] - kf0["time"]
-        t = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
+        t   = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
+
+        # Smoothstep easing — eliminates velocity snaps at keyframe boundaries
+        # t goes 0->1, output accelerates then decelerates
+        t = t * t * (3.0 - 2.0 * t)
 
         return [
             kf0["positions"][j] + t * (kf1["positions"][j] - kf0["positions"][j])

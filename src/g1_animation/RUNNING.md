@@ -99,17 +99,26 @@ controller. Then shut down the loco stack.
 
 ---
 
-## Available animations
+## Recording
 
-| Name      | Description                        |
-|-----------|------------------------------------|
-| `hands`   | Raise both arms overhead           |
-| `arms`    | Wave both arms                     |
-| `wave`    | Single right-arm wave              |
-| `reach`   | Both arms sweep forward            |
-| `twist`   | Waist yaw left/right               |
-| `cross`   | Arms cross at chest                |
-| `neutral` | Return to neutral pose             |
+Capture a single pose
+python3 ~/g1_ws/scripts/read_pose.py enp46s0
+
+---
+
+Record a series of poses
+python3 ~/g1_ws/scripts/record_poses.py enp46s0 --spacing 0.5 --name NEW_ANIMATION
+```
+A typical recording session looks like this:
+```
+[0 captured] > p               ← preview current positions
+[0 captured] >                 ← Enter to capture as "pose_1"
+[1 captured] > l arms raised   ← capture with label "arms raised"
+[2 captured] > d               ← discard if you moved wrong
+[2 captured] > l arms down     ← capture return pose
+[3 captured] > q               ← finish and print output
+
+The output is paste-ready into keyframes.py, and is also saved to /tmp/new_animation_recorded.py as a backup. The --spacing flag sets the time gap between each captured keyframe — use 0.5 for fast animations, 1.5 for slow deliberate ones. You can always hand-edit the timestamps after pasting.
 
 ## Parameters
 
