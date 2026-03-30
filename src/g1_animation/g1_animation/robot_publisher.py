@@ -13,6 +13,9 @@ Prerequisites:
 import rclpy
 from rclpy.node import Node
 from rclpy.clock import Clock
+from rcl_interfaces.msg import SetParametersResult
+from std_srvs.srv import Trigger
+from sensor_msgs.msg import JointState
 import time
 import math
 
@@ -23,7 +26,7 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.core.channel import ChannelSubscriber
 from unitree_sdk2py.utils.crc import CRC
 
-from .keyframes import UPPER_BODY_JOINTS, ANIMATIONS
+from .keyframes import UPPER_BODY_JOINTS, ANIMATIONS, NEUTRAL
 
 
 # G1 joint index mapping (SDK2 ordering for upper body)
@@ -73,12 +76,16 @@ class RobotPublisher(Node):
         self.declare_parameter('dry_run', True)   # True = print only, don't send
         self.declare_parameter('animation', 'hands')
         self.declare_parameter('mode', 'damping')  # 'damping' or 'walking'
+        self.declare_parameter('speed', 1.0)       # playback speed multiplier
 
         self._iface     = self.get_parameter('network_interface').value
         self._loop      = self.get_parameter('loop').value
         self._dry       = self.get_parameter('dry_run').value
         anim_name       = self.get_parameter('animation').value
         self._mode      = self.get_parameter('mode').value
+        self._speed     = self.get_parameter('speed').value
+
+        self.add_on_set_parameters_callback(self._on_parameters_change)
 
         if self._mode not in ('damping', 'walking'):
             raise ValueError(f"Invalid mode '{self._mode}'. Use 'damping' or 'walking'.")
@@ -116,8 +123,42 @@ class RobotPublisher(Node):
         else:
             self._prev_positions = list(self._keyframes[0]["positions"])
 
+        # Joint states publisher — active in dry-run for RViz preview
+        self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
+
         # 200 Hz control loop (Unitree expects high-freq commands)
         self.timer = self.create_timer(0.005, self.tick)
+
+        # Services — same interface as animation_publisher so the CLI works with either
+        for name in ANIMATIONS:
+            self.create_service(
+                Trigger,
+                f'/animation/play/{name}',
+                lambda req, res, n=name: self._handle_play(req, res, n),
+            )
+        self.create_service(Trigger, '/animation/stop', self._handle_stop)
+
+    def _handle_play(self, request, response, name: str):
+        self._keyframes  = ANIMATIONS[name]
+        self._start_time = time.time()
+        # _prev_positions is intentionally kept — rate limiter smooths the transition
+        response.success = True
+        response.message = f"Playing '{name}'"
+        self.get_logger().info(response.message)
+        return response
+
+    def _handle_stop(self, request, response):
+        """Blend from current pose to neutral over 1.5 s, then hold."""
+        self._keyframes = [
+            {"time": 0.0, "positions": list(self._prev_positions)},
+            {"time": 1.5, "positions": list(NEUTRAL)},
+        ]
+        self._start_time = time.time()
+        self._loop = False
+        response.success = True
+        response.message = "Stopping — blending to neutral"
+        self.get_logger().info(response.message)
+        return response
 
     def _init_sdk(self):
         """Initialize Unitree SDK2 channel."""
@@ -148,6 +189,18 @@ class RobotPublisher(Node):
     def _state_callback(self, msg: LowState_):
         self._state = msg
 
+    def _on_parameters_change(self, params):
+        for p in params:
+            if p.name == 'speed':
+                if p.value <= 0:
+                    return SetParametersResult(successful=False, reason='speed must be > 0')
+                # Adjust start time so elapsed position in the animation is preserved
+                old_elapsed = (time.time() - self._start_time) * self._speed
+                self._speed = p.value
+                self._start_time = time.time() - old_elapsed / self._speed
+                self.get_logger().info(f"Playback speed: {self._speed:.2f}x")
+        return SetParametersResult(successful=True)
+
     def _interpolate(self, elapsed: float) -> list[float]:
         """Linear interpolation between keyframes."""
         total = self._keyframes[-1]["time"]
@@ -171,7 +224,7 @@ class RobotPublisher(Node):
         ]
 
     def tick(self):
-        elapsed = time.time() - self._start_time
+        elapsed = (time.time() - self._start_time) * self._speed
         target = self._interpolate(elapsed)
 
         # Clamp each joint's step to MAX_JOINT_VEL * dt
@@ -183,10 +236,11 @@ class RobotPublisher(Node):
         self._prev_positions = positions
 
         if self._dry:
-            # Just log — useful for verifying indices before going live
-            preview = {name: f"{pos:.3f}"
-                       for name, pos in zip(UPPER_BODY_JOINTS, positions)}
-            self.get_logger().info(f"[DRY] t={elapsed:.2f}s  {preview}", throttle_duration_sec=0.5)
+            js = JointState()
+            js.header.stamp = self.get_clock().now().to_msg()
+            js.name         = UPPER_BODY_JOINTS
+            js.position     = positions
+            self.js_pub.publish(js)
             return
 
         # Build LowCmd
