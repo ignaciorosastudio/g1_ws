@@ -7,10 +7,12 @@ G1 Animation Publisher
 - Publishes /joint_states for RViz preview
 """
 import rclpy
+import rclpy.duration
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
+from rcl_interfaces.msg import SetParametersResult
 
 from .keyframes import UPPER_BODY_JOINTS, ANIMATIONS, NEUTRAL
 
@@ -41,6 +43,10 @@ class AnimationPublisher(Node):
         self.create_service(Trigger, '/animation/stop', self._handle_stop)
 
         # --- state ---
+        self.declare_parameter('speed', 1.0)
+        self._speed = self.get_parameter('speed').value
+        self.add_on_set_parameters_callback(self._on_parameters_change)
+
         self._current_clip   = None      # name of playing clip
         self._keyframes      = None      # active keyframe list
         self._start_time     = None
@@ -58,6 +64,23 @@ class AnimationPublisher(Node):
     # ------------------------------------------------------------------
     # Service handlers
     # ------------------------------------------------------------------
+
+    def _on_parameters_change(self, params):
+        for p in params:
+            if p.name == 'speed':
+                if p.value <= 0:
+                    return SetParametersResult(successful=False, reason='speed must be > 0')
+                if self._playing and self._start_time is not None:
+                    now = self.get_clock().now()
+                    old_elapsed = (now - self._start_time).nanoseconds / 1e9 * self._speed
+                    self._speed = p.value
+                    self._start_time = now - rclpy.duration.Duration(
+                        nanoseconds=int(old_elapsed / self._speed * 1e9)
+                    )
+                else:
+                    self._speed = p.value
+                self.get_logger().info(f"Playback speed: {self._speed:.2f}x")
+        return SetParametersResult(successful=True)
 
     def _handle_play(self, request, response, name: str):
         """Blend from current pose into the first frame of the clip, then play."""
@@ -172,7 +195,7 @@ class AnimationPublisher(Node):
 
     def _tick(self):
         if self._playing:
-            elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
+            elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9 * self._speed
             self._current_positions = self._interpolate(elapsed)
 
             # Publish status

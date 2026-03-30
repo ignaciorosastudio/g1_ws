@@ -10,6 +10,8 @@ Usage:
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 import threading
 import sys
 
@@ -53,6 +55,48 @@ class AnimationCLI(Node):
         else:
             print(f"  [error] no response from service")
 
+    def _get_param_client(self):
+        """Return the parameter client for whichever animation node is running."""
+        for node_name in ('animation_publisher', 'robot_publisher'):
+            key = f'_param_client_{node_name}'
+            if not hasattr(self, key):
+                setattr(self, key, self.create_client(
+                    SetParameters, f'/{node_name}/set_parameters'
+                ))
+            client = getattr(self, key)
+            if client.wait_for_service(timeout_sec=0.5):
+                return client
+        return None
+
+    def set_speed(self, speed: float):
+        client = self._get_param_client()
+        if client is None:
+            print("  [error] neither animation_publisher nor robot_publisher is available")
+            return
+
+        pv = ParameterValue()
+        pv.type = ParameterType.PARAMETER_DOUBLE
+        pv.double_value = speed
+
+        param = Parameter()
+        param.name = 'speed'
+        param.value = pv
+
+        req = SetParameters.Request()
+        req.parameters = [param]
+
+        future = client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+
+        if future.result():
+            result = future.result().results[0]
+            if result.successful:
+                print(f"  [OK] speed set to {speed:.2f}x")
+            else:
+                print(f"  [FAIL] {result.reason}")
+        else:
+            print("  [error] no response from service")
+
     def discover_clips(self):
         """List available /animation/play/* services."""
         names = []
@@ -68,7 +112,7 @@ def input_loop(node: AnimationCLI):
         print(f"Available clips: {', '.join(clips)}")
     else:
         print("No clips found yet — make sure animation_publisher is running.")
-    print("Commands: <clip_name> | stop | list | quit\n")
+    print("Commands: <clip_name> | stop | list | speed <value> | quit\n")
 
     while rclpy.ok():
         try:
@@ -86,6 +130,18 @@ def input_loop(node: AnimationCLI):
             print(f"  Available: {', '.join(clips) if clips else 'none found'}")
         elif cmd == 'stop':
             node.call('stop')
+        elif cmd.startswith('speed'):
+            parts = cmd.split()
+            if len(parts) != 2:
+                print("  Usage: speed <value>  (e.g. speed 0.5, speed 2.0)")
+            else:
+                try:
+                    val = float(parts[1])
+                    if val <= 0:
+                        raise ValueError
+                    node.set_speed(val)
+                except ValueError:
+                    print("  Usage: speed <positive number>  (e.g. speed 0.5, speed 2.0)")
         else:
             node.call(cmd)
 
