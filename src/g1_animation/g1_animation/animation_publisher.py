@@ -49,6 +49,7 @@ class AnimationPublisher(Node):
 
         self._current_clip   = None      # name of playing clip
         self._keyframes      = None      # active keyframe list
+        self._interp_mode    = "linear"  # set per-clip from ANIMATIONS registry
         self._start_time     = None
         self._loop           = False
         self._playing        = False
@@ -84,16 +85,18 @@ class AnimationPublisher(Node):
 
     def _handle_play(self, request, response, name: str):
         """Blend from current pose into the first frame of the clip, then play."""
-        target_first_frame = ANIMATIONS[name][0]["positions"]
+        clip = ANIMATIONS[name]
+        target_first_frame = clip["keyframes"][0]["positions"]
         blend_then_play = [
             {"time": 0.0,  "positions": list(self._current_positions)},
             {"time": 0.5, "positions": target_first_frame},
         ] + [
             {"time": kf["time"] + 0.5, "positions": kf["positions"]}
-            for kf in ANIMATIONS[name]
+            for kf in clip["keyframes"]
         ]
         self._current_clip = name
         self._keyframes    = blend_then_play
+        self._interp_mode  = clip["interp"]
         self._start_time   = self.get_clock().now()
         self._loop         = False
         self._playing      = True
@@ -138,8 +141,10 @@ class AnimationPublisher(Node):
     # ------------------------------------------------------------------
 
     def _start_clip(self, name: str, loop: bool = False):
+        clip = ANIMATIONS[name]
         self._current_clip = name
-        self._keyframes    = ANIMATIONS[name]
+        self._keyframes    = clip["keyframes"]
+        self._interp_mode  = clip["interp"]
         self._start_time   = self.get_clock().now()
         self._loop         = loop
         self._playing      = True
@@ -163,8 +168,26 @@ class AnimationPublisher(Node):
     # Interpolation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _catmull_rom(p0, p1, p2, p3, t):
+        """
+        Catmull-Rom spline interpolation between p1 and p2.
+        p0 and p3 are the surrounding control points that shape the curve.
+        Produces continuous velocity and acceleration through keyframes.
+        """
+        t2 = t * t
+        t3 = t2 * t
+        return (
+            0.5 * (
+                (2 * p1)
+                + (-p0 + p2) * t
+                + (2*p0 - 5*p1 + 4*p2 - p3) * t2
+                + (-p0 + 3*p1 - 3*p2 + p3) * t3
+            )
+        )
+
     def _interpolate(self, elapsed: float) -> list:
-        kfs = self._keyframes
+        kfs   = self._keyframes
         total = kfs[-1]["time"]
 
         if elapsed >= total:
@@ -172,24 +195,43 @@ class AnimationPublisher(Node):
                 elapsed = elapsed % total
             else:
                 self._stop()
-                return list(kfs[-1]["positions"])  # hold last frame
+                return list(kfs[-1]["positions"])
 
-        # Find surrounding keyframes
-        kf0, kf1 = kfs[0], kfs[-1]
+        # Find segment index
+        seg_idx = 0
         for i in range(len(kfs) - 1):
             if kfs[i]["time"] <= elapsed <= kfs[i + 1]["time"]:
-                kf0, kf1 = kfs[i], kfs[i + 1]
+                seg_idx = i
                 break
 
-        seg = kf1["time"] - kf0["time"]
-        t   = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
+        seg   = kfs[seg_idx + 1]["time"] - kfs[seg_idx]["time"]
+        raw_t = 0.0 if seg == 0 else (elapsed - kfs[seg_idx]["time"]) / seg
 
-        # Smoothstep easing — eliminates velocity snaps at keyframe boundaries
-        # t goes 0->1, output accelerates then decelerates
-        t = t * t * (3.0 - 2.0 * t)
+        # Apply easing
+        if self._interp_mode in ("smoothstep", "catmull_rom"):
+            t = raw_t * raw_t * (3.0 - 2.0 * raw_t)
+        else:  # linear
+            t = raw_t
 
+        if self._interp_mode == "catmull_rom":
+            i0 = max(seg_idx - 1, 0)
+            i1 = seg_idx
+            i2 = seg_idx + 1
+            i3 = min(seg_idx + 2, len(kfs) - 1)
+            return [
+                self._catmull_rom(
+                    kfs[i0]["positions"][j],
+                    kfs[i1]["positions"][j],
+                    kfs[i2]["positions"][j],
+                    kfs[i3]["positions"][j],
+                    t,
+                )
+                for j in range(len(UPPER_BODY_JOINTS))
+            ]
+
+        # linear or smoothstep — plain lerp with eased t
         return [
-            kf0["positions"][j] + t * (kf1["positions"][j] - kf0["positions"][j])
+            kfs[seg_idx]["positions"][j] + t * (kfs[seg_idx + 1]["positions"][j] - kfs[seg_idx]["positions"][j])
             for j in range(len(UPPER_BODY_JOINTS))
         ]
 

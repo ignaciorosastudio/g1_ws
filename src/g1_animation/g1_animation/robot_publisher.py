@@ -109,9 +109,10 @@ class RobotPublisher(Node):
                 "Make sure the robot is in Debug/Damping mode!"
             )
             self._init_sdk()
-        self._start_time = time.time()
-        self._keyframes  = ANIMATIONS[anim_name]
-        self.get_logger().info(f"Animation: '{anim_name}'")
+        self._start_time  = time.time()
+        self._keyframes   = ANIMATIONS[anim_name]["keyframes"]
+        self._interp_mode = ANIMATIONS[anim_name]["interp"]
+        self.get_logger().info(f"Animation: '{anim_name}' (interp: {self._interp_mode})")
 
         # Seed rate-limiter from live state so the first move is smooth.
         # Falls back to the first keyframe in dry-run mode.
@@ -139,8 +140,9 @@ class RobotPublisher(Node):
         self.create_service(Trigger, '/animation/stop', self._handle_stop)
 
     def _handle_play(self, request, response, name: str):
-        self._keyframes  = ANIMATIONS[name]
-        self._start_time = time.time()
+        self._keyframes   = ANIMATIONS[name]["keyframes"]
+        self._interp_mode = ANIMATIONS[name]["interp"]
+        self._start_time  = time.time()
         # _prev_positions is intentionally kept — rate limiter smooths the transition
         response.success = True
         response.message = f"Playing '{name}'"
@@ -201,33 +203,66 @@ class RobotPublisher(Node):
                 self.get_logger().info(f"Playback speed: {self._speed:.2f}x")
         return SetParametersResult(successful=True)
 
+    @staticmethod
+    def _catmull_rom(p0, p1, p2, p3, t):
+        """
+        Catmull-Rom spline interpolation between p1 and p2.
+        p0 and p3 are the surrounding control points that shape the curve.
+        Produces continuous velocity and acceleration through keyframes.
+        """
+        t2 = t * t
+        t3 = t2 * t
+        return (
+            0.5 * (
+                (2 * p1)
+                + (-p0 + p2) * t
+                + (2*p0 - 5*p1 + 4*p2 - p3) * t2
+                + (-p0 + 3*p1 - 3*p2 + p3) * t3
+            )
+        )
+
     def _interpolate(self, elapsed: float) -> list:
-        kfs = self._keyframes
+        kfs   = self._keyframes
         total = kfs[-1]["time"]
 
-        if elapsed >= total:
-            if self._loop:
-                elapsed = elapsed % total
-            else:
-                self._stop()
-                return list(kfs[-1]["positions"])
+        if elapsed > total:
+            elapsed = elapsed % total if self._loop else total
 
-        # Find surrounding keyframes
-        kf0, kf1 = kfs[0], kfs[-1]
+        # Find segment index
+        seg_idx = 0
         for i in range(len(kfs) - 1):
             if kfs[i]["time"] <= elapsed <= kfs[i + 1]["time"]:
-                kf0, kf1 = kfs[i], kfs[i + 1]
+                seg_idx = i
                 break
 
-        seg = kf1["time"] - kf0["time"]
-        t   = 0.0 if seg == 0 else (elapsed - kf0["time"]) / seg
+        seg   = kfs[seg_idx + 1]["time"] - kfs[seg_idx]["time"]
+        raw_t = 0.0 if seg == 0 else (elapsed - kfs[seg_idx]["time"]) / seg
 
-        # Smoothstep easing — eliminates velocity snaps at keyframe boundaries
-        # t goes 0->1, output accelerates then decelerates
-        t = t * t * (3.0 - 2.0 * t)
+        # Apply easing
+        if self._interp_mode in ("smoothstep", "catmull_rom"):
+            t = raw_t * raw_t * (3.0 - 2.0 * raw_t)
+        else:  # linear
+            t = raw_t
 
+        if self._interp_mode == "catmull_rom":
+            i0 = max(seg_idx - 1, 0)
+            i1 = seg_idx
+            i2 = seg_idx + 1
+            i3 = min(seg_idx + 2, len(kfs) - 1)
+            return [
+                self._catmull_rom(
+                    kfs[i0]["positions"][j],
+                    kfs[i1]["positions"][j],
+                    kfs[i2]["positions"][j],
+                    kfs[i3]["positions"][j],
+                    t,
+                )
+                for j in range(len(UPPER_BODY_JOINTS))
+            ]
+
+        # linear or smoothstep — plain lerp with eased t
         return [
-            kf0["positions"][j] + t * (kf1["positions"][j] - kf0["positions"][j])
+            kfs[seg_idx]["positions"][j] + t * (kfs[seg_idx + 1]["positions"][j] - kfs[seg_idx]["positions"][j])
             for j in range(len(UPPER_BODY_JOINTS))
         ]
 

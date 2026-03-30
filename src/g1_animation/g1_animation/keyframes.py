@@ -130,15 +130,21 @@ TYPING = [
     {'time': 14, 'positions': NEUTRAL},
 ]
 
+# Interpolation modes:
+#   "linear"      — plain lerp; sharp corners at each keyframe. Good for mechanical/repetitive motion.
+#   "smoothstep"  — ease-in/out lerp within each segment; still has corners but feels softer.
+#   "catmull_rom" — smooth spline through keyframes + smoothstep easing. Best for organic motion.
+
 # Registry — add new clips here, they become available as service commands
 ANIMATIONS = {
-    "hands":   HANDS_UP,
-    "arms":    WAVE_ARMS,
-    "wave":    WAVE_RIGHT,
-    "reach":   REACH_FORWARD,
-    "twist":   TWIST,
-    "cross":   CROSS,
-    "typing":  TYPING,
-    "neutral": [{"time": 0.0, "positions": NEUTRAL},
-                {"time": 0.5, "positions": NEUTRAL}],
+    "hands":   {"keyframes": HANDS_UP,       "interp": "catmull_rom"},
+    "arms":    {"keyframes": WAVE_ARMS,      "interp": "catmull_rom"},
+    "wave":    {"keyframes": WAVE_RIGHT,     "interp": "catmull_rom"},
+    "reach":   {"keyframes": REACH_FORWARD,  "interp": "catmull_rom"},
+    "twist":   {"keyframes": TWIST,          "interp": "catmull_rom"},
+    "cross":   {"keyframes": CROSS,          "interp": "catmull_rom"},
+    "typing":  {"keyframes": TYPING,         "interp": "linear"},
+    "neutral": {"keyframes": [{"time": 0.0, "positions": NEUTRAL},
+                               {"time": 0.5, "positions": NEUTRAL}],
+                "interp": "linear"},
 }
