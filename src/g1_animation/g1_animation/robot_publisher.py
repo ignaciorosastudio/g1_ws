@@ -123,8 +123,10 @@ class RobotPublisher(Node):
         """Initialize Unitree SDK2 channel."""
         ChannelFactoryInitialize(0, self._iface)
         self._crc = CRC()
-        self._cmd_pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        topic = "rt/arm_sdk" if self._mode == "walking" else "rt/lowcmd"
+        self._cmd_pub = ChannelPublisher(topic, LowCmd_)
         self._cmd_pub.Init()
+        self.get_logger().info(f"Publishing to {topic}")
 
         # Subscribe to state so we can read current positions before moving
         sub = ChannelSubscriber("rt/lowstate", LowState_)
@@ -189,8 +191,15 @@ class RobotPublisher(Node):
 
         # Build LowCmd
         cmd = unitree_hg_msg_dds__LowCmd_()
-        cmd.mode_pr = 0   # PR mode (series joints)
-        cmd.mode_machine = self._state.mode_machine  # must mirror robot state
+
+        if self._mode == "damping":
+            # Full low-level control — must mirror robot's mode_machine
+            cmd.mode_pr      = 0
+            cmd.mode_machine = self._state.mode_machine if self._state else 0
+        else:
+            # Walking mode: locomotion controller owns mode_machine;
+            # set weight=1 so our commands fully override arm swing
+            cmd.motor_cmd[WEIGHT_JOINT].q = 1.0
 
         for i, joint_name in enumerate(UPPER_BODY_JOINTS):
             idx = G1_JOINT_INDEX.get(joint_name)
@@ -206,6 +215,32 @@ class RobotPublisher(Node):
         cmd.crc = self._crc.Crc(cmd)
         self._cmd_pub.Write(cmd)
 
+    def _release_walking_mode(self):
+        """Ramp arm_sdk weight from 1 → 0 so the loco controller smoothly
+        reclaims the arms instead of snapping to its own positions."""
+        if self._mode != "walking" or self._dry:
+            return
+        self.get_logger().info("Releasing arm_sdk — ramping weight to 0...")
+        for step in range(WEIGHT_RAMP_STEPS, -1, -1):
+            cmd = unitree_hg_msg_dds__LowCmd_()
+            cmd.motor_cmd[WEIGHT_JOINT].q = step / WEIGHT_RAMP_STEPS
+            # Hold last commanded positions so the blend transitions from our
+            # pose to the loco controller's pose rather than snapping to zero.
+            for i, joint_name in enumerate(UPPER_BODY_JOINTS):
+                idx = G1_JOINT_INDEX.get(joint_name)
+                if idx is None:
+                    continue
+                motor = cmd.motor_cmd[idx]  # type: ignore[index]
+                motor.q   = self._prev_positions[i]
+                motor.dq  = 0.0
+                motor.tau = 0.0
+                motor.kp  = KP
+                motor.kd  = KD
+            cmd.crc = self._crc.Crc(cmd)
+            self._cmd_pub.Write(cmd)
+            time.sleep(CONTROL_DT)
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = RobotPublisher()
@@ -214,6 +249,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node._release_walking_mode()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -15,6 +15,8 @@ def generate_launch_description():
                               description='Loop the animation'),
         DeclareLaunchArgument('animation', default_value='hands',
                               description='Animation to play (hands/arms/wave/reach/twist/cross/neutral)'),
+        DeclareLaunchArgument('mode', default_value='damping',
+                              description='Control mode: damping (rt/lowcmd, robot static) or walking (rt/arm_sdk, loco controller active)'),
 
         Node(
             package='g1_animation',
@@ -25,6 +27,7 @@ def generate_launch_description():
                 'dry_run':           LaunchConfiguration('dry_run'),
                 'loop':              LaunchConfiguration('loop'),
                 'animation':         LaunchConfiguration('animation'),
+                'mode':              LaunchConfiguration('mode'),
             }],
             output='screen',
         ),

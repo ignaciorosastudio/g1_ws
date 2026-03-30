@@ -5,6 +5,7 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
+from launch.actions import SetEnvironmentVariable
 
 
 def generate_launch_description():
@@ -24,6 +25,11 @@ def generate_launch_description():
     use_gui = LaunchConfiguration('use_gui')
 
     return LaunchDescription([
+        SetEnvironmentVariable(
+            'CYCLONEDDS_URI',
+            'file://' + os.path.expanduser('~/g1_ws/config/cyclonedds_local.xml')
+        ),
+
         # Declare argument
         DeclareLaunchArgument(
             'use_gui',
@@ -55,6 +61,7 @@ def generate_launch_description():
             package='joint_state_publisher_gui',
             executable='joint_state_publisher_gui',
             name='joint_state_publisher_gui',
+            parameters=[{'robot_description': robot_description}],
             output='screen',
             condition=IfCondition(use_gui),
         ),
@@ -66,7 +73,7 @@ def generate_launch_description():
             name='rviz2',
             arguments=[
                 '-d',
-                os.path.join(g1pilot_share, 'config', 'g1pilot.rviz')
+                os.path.join(g1pilot_share, 'config', '29dof.rviz')
             ],
             output='screen',
         ),

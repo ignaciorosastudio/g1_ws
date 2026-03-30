@@ -3,3 +3,4 @@ install/
 log/
 src/g1pilot
 .vscode
+src/g1_animation/g1_animation/__pycache__
