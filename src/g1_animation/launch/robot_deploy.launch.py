@@ -12,9 +12,7 @@ def generate_launch_description():
         DeclareLaunchArgument('dry_run', default_value='true',
                               description='Print commands only, do not send to robot'),
         DeclareLaunchArgument('loop', default_value='true',
-                              description='Loop the animation'),
-        DeclareLaunchArgument('animation', default_value='hands',
-                              description='Animation to play (hands/arms/wave/reach/twist/cross/neutral)'),
+                              description='Loop the animation when playing'),
         DeclareLaunchArgument('mode', default_value='damping',
                               description='Control mode: damping (rt/lowcmd, robot static) or walking (rt/arm_sdk, loco controller active)'),
 
@@ -26,7 +24,6 @@ def generate_launch_description():
                 'network_interface': LaunchConfiguration('network_interface'),
                 'dry_run':           LaunchConfiguration('dry_run'),
                 'loop':              LaunchConfiguration('loop'),
-                'animation':         LaunchConfiguration('animation'),
                 'mode':              LaunchConfiguration('mode'),
             }],
             output='screen',

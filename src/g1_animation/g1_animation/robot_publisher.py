@@ -58,8 +58,9 @@ KD = 1.5    # damping gain
 # Maximum joint speed (rad/s) — limits how fast any joint can move per tick.
 # At 200 Hz each tick is 5 ms, so 0.5 rad/s → max 0.0025 rad per tick.
 # Increase to allow faster animations; decrease for a slower, safer startup.
-MAX_JOINT_VEL = 0.5   # rad/s
-CONTROL_DT    = 0.005 # must match timer period
+MAX_JOINT_VEL  = 3.0    # rad/s — limits startup snap only; must exceed max animation velocity
+CONTROL_DT     = 0.005  # must match timer period
+MIN_CMD_DELTA  = 0.0002 # rad — skip DDS write if no joint moved more than this
 
 # arm_sdk weight register — motor_cmd[29].q controls blending between
 # the locomotion controller's arm swing (0.0) and our commands (1.0).
@@ -74,14 +75,12 @@ class RobotPublisher(Node):
         self.declare_parameter('network_interface', 'enp3s0')
         self.declare_parameter('loop', True)
         self.declare_parameter('dry_run', True)   # True = print only, don't send
-        self.declare_parameter('animation', 'hands')
         self.declare_parameter('mode', 'damping')  # 'damping' or 'walking'
         self.declare_parameter('speed', 1.0)       # playback speed multiplier
 
         self._iface     = self.get_parameter('network_interface').value
         self._loop      = self.get_parameter('loop').value
         self._dry       = self.get_parameter('dry_run').value
-        anim_name       = self.get_parameter('animation').value
         self._mode      = self.get_parameter('mode').value
         self._speed     = self.get_parameter('speed').value
 
@@ -89,12 +88,6 @@ class RobotPublisher(Node):
 
         if self._mode not in ('damping', 'walking'):
             raise ValueError(f"Invalid mode '{self._mode}'. Use 'damping' or 'walking'.")
-
-        if anim_name not in ANIMATIONS:
-            raise ValueError(
-                f"Unknown animation '{anim_name}'. "
-                f"Available: {', '.join(ANIMATIONS.keys())}"
-            )
 
         self._state = None
 
@@ -109,20 +102,24 @@ class RobotPublisher(Node):
                 "Make sure the robot is in Debug/Damping mode!"
             )
             self._init_sdk()
-        self._start_time  = time.time()
-        self._keyframes   = ANIMATIONS[anim_name]["keyframes"]
-        self._interp_mode = ANIMATIONS[anim_name]["interp"]
-        self.get_logger().info(f"Animation: '{anim_name}' (interp: {self._interp_mode})")
 
-        # Seed rate-limiter from live state so the first move is smooth.
-        # Falls back to the first keyframe in dry-run mode.
+        self._playing     = False
+        self._keyframes   = None
+        self._interp_mode = "linear"
+        self._start_time  = time.time()
+
+        # Seed rate-limiter from live robot state; fall back to neutral in dry-run.
         if self._state is not None:
             self._prev_positions = [
                 self._state.motor_state[G1_JOINT_INDEX[j]].q
                 for j in UPPER_BODY_JOINTS
             ]
         else:
-            self._prev_positions = list(self._keyframes[0]["positions"])
+            self._prev_positions = list(NEUTRAL)
+
+        self.get_logger().info(
+            f"Idle — available clips: {', '.join(ANIMATIONS.keys())}"
+        )
 
         # Joint states publisher — active in dry-run for RViz preview
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
@@ -143,6 +140,7 @@ class RobotPublisher(Node):
         self._keyframes   = ANIMATIONS[name]["keyframes"]
         self._interp_mode = ANIMATIONS[name]["interp"]
         self._start_time  = time.time()
+        self._playing     = True
         # _prev_positions is intentionally kept — rate limiter smooths the transition
         response.success = True
         response.message = f"Playing '{name}'"
@@ -150,13 +148,19 @@ class RobotPublisher(Node):
         return response
 
     def _handle_stop(self, request, response):
-        """Blend from current pose to neutral over 1.5 s, then hold."""
-        self._keyframes = [
+        if not self._playing:
+            response.success = False
+            response.message = "Nothing playing"
+            return response
+        """Blend from current pose to neutral over 1.5 s, then go idle."""
+        self._keyframes  = [
             {"time": 0.0, "positions": list(self._prev_positions)},
             {"time": 1.5, "positions": list(NEUTRAL)},
         ]
-        self._start_time = time.time()
-        self._loop = False
+        self._interp_mode = "linear"
+        self._start_time  = time.time()
+        self._loop        = False
+        # _playing stays True so the blend runs; tick() sets it False when done
         response.success = True
         response.message = "Stopping — blending to neutral"
         self.get_logger().info(response.message)
@@ -249,16 +253,21 @@ class RobotPublisher(Node):
             i1 = seg_idx
             i2 = seg_idx + 1
             i3 = min(seg_idx + 2, len(kfs) - 1)
-            return [
-                self._catmull_rom(
+            result = []
+            for j in range(len(UPPER_BODY_JOINTS)):
+                val = self._catmull_rom(
                     kfs[i0]["positions"][j],
                     kfs[i1]["positions"][j],
                     kfs[i2]["positions"][j],
                     kfs[i3]["positions"][j],
                     t,
                 )
-                for j in range(len(UPPER_BODY_JOINTS))
-            ]
+                # Clamp to segment bounds — prevents overshoot from causing
+                # motor reversals near keyframe boundaries
+                lo = min(kfs[i1]["positions"][j], kfs[i2]["positions"][j])
+                hi = max(kfs[i1]["positions"][j], kfs[i2]["positions"][j])
+                result.append(max(lo, min(hi, val)))
+            return result
 
         # linear or smoothstep — plain lerp with eased t
         return [
@@ -267,12 +276,28 @@ class RobotPublisher(Node):
         ]
 
     def tick(self):
+        if not self._playing:
+            if self._dry:
+                js = JointState()
+                js.header.stamp = self.get_clock().now().to_msg()
+                js.name         = UPPER_BODY_JOINTS
+                js.position     = self._prev_positions
+                js.velocity     = [0.0] * len(UPPER_BODY_JOINTS)
+                self.js_pub.publish(js)
+            return
+
         elapsed = (time.time() - self._start_time) * self._speed
+
+        # Stop looping once a non-looping clip finishes
+        if not self._loop and elapsed >= self._keyframes[-1]["time"]:
+            self._playing = False
+
         target = self._interpolate(elapsed)
 
         # Clamp each joint's step to MAX_JOINT_VEL * dt
-        max_delta = MAX_JOINT_VEL * CONTROL_DT
-        positions = []
+        max_delta    = MAX_JOINT_VEL * CONTROL_DT
+        old_positions = list(self._prev_positions)
+        positions     = []
         for prev, tgt in zip(self._prev_positions, target):
             delta = max(-max_delta, min(max_delta, tgt - prev))
             positions.append(prev + delta)
@@ -283,7 +308,13 @@ class RobotPublisher(Node):
             js.header.stamp = self.get_clock().now().to_msg()
             js.name         = UPPER_BODY_JOINTS
             js.position     = positions
+            js.velocity     = [(p - o) / CONTROL_DT for p, o in zip(positions, old_positions)]
             self.js_pub.publish(js)
+            return
+
+        # Skip DDS write if no joint moved meaningfully — suppresses noise during
+        # holds and Catmull-Rom micro-oscillations near keyframe boundaries.
+        if max(abs(p - o) for p, o in zip(positions, old_positions)) < MIN_CMD_DELTA:
             return
 
         # Build LowCmd
@@ -304,7 +335,7 @@ class RobotPublisher(Node):
                 continue
             cmd.motor_cmd[idx].mode = 1   # position control
             cmd.motor_cmd[idx].q    = positions[i]
-            cmd.motor_cmd[idx].dq   = 0.0
+            cmd.motor_cmd[idx].dq   = (positions[i] - old_positions[i]) / CONTROL_DT
             cmd.motor_cmd[idx].tau  = 0.0
             cmd.motor_cmd[idx].kp   = KP
             cmd.motor_cmd[idx].kd   = KD

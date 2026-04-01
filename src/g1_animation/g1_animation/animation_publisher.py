@@ -218,16 +218,19 @@ class AnimationPublisher(Node):
             i1 = seg_idx
             i2 = seg_idx + 1
             i3 = min(seg_idx + 2, len(kfs) - 1)
-            return [
-                self._catmull_rom(
+            result = []
+            for j in range(len(UPPER_BODY_JOINTS)):
+                val = self._catmull_rom(
                     kfs[i0]["positions"][j],
                     kfs[i1]["positions"][j],
                     kfs[i2]["positions"][j],
                     kfs[i3]["positions"][j],
                     t,
                 )
-                for j in range(len(UPPER_BODY_JOINTS))
-            ]
+                lo = min(kfs[i1]["positions"][j], kfs[i2]["positions"][j])
+                hi = max(kfs[i1]["positions"][j], kfs[i2]["positions"][j])
+                result.append(max(lo, min(hi, val)))
+            return result
 
         # linear or smoothstep — plain lerp with eased t
         return [

@@ -99,6 +99,19 @@ controller. Then shut down the loco stack.
 
 ---
 
+## Debugging
+
+# Check joint_states are publishing at ~50 Hz
+ros2 topic hz /joint_states
+
+# Inspect a message
+ros2 topic echo /joint_states --once
+
+# See all active topics
+ros2 topic list
+
+---
+
 ## Recording
 
 Capture a single pose

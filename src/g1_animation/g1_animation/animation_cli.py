@@ -107,11 +107,13 @@ class AnimationCLI(Node):
 
 
 def input_loop(node: AnimationCLI):
-    clips = node.discover_clips()
-    if clips:
-        print(f"Available clips: {', '.join(clips)}")
+    print("Waiting for animation node...", flush=True)
+    sentinel = node.create_client(Trigger, '/animation/stop')
+    if sentinel.wait_for_service(timeout_sec=10.0):
+        clips = node.discover_clips()
+        print(f"Connected. Available clips: {', '.join(clips) if clips else 'none found'}")
     else:
-        print("No clips found yet — make sure animation_publisher is running.")
+        print("No animation node found after 10s — check that the publisher is running and using the same env.")
     print("Commands: <clip_name> | stop | list | speed <value> | quit\n")
 
     while rclpy.ok():
