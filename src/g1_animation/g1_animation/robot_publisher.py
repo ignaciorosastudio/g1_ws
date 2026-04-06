@@ -60,7 +60,6 @@ KD = 1.5    # damping gain
 # Increase to allow faster animations; decrease for a slower, safer startup.
 MAX_JOINT_VEL  = 3.0    # rad/s — limits startup snap only; must exceed max animation velocity
 CONTROL_DT     = 0.005  # must match timer period
-MIN_CMD_DELTA  = 0.0002 # rad — skip DDS write if no joint moved more than this
 
 # arm_sdk weight register — motor_cmd[29].q controls blending between
 # the locomotion controller's arm swing (0.0) and our commands (1.0).
@@ -310,11 +309,6 @@ class RobotPublisher(Node):
             js.position     = positions
             js.velocity     = [(p - o) / CONTROL_DT for p, o in zip(positions, old_positions)]
             self.js_pub.publish(js)
-            return
-
-        # Skip DDS write if no joint moved meaningfully — suppresses noise during
-        # holds and Catmull-Rom micro-oscillations near keyframe boundaries.
-        if max(abs(p - o) for p, o in zip(positions, old_positions)) < MIN_CMD_DELTA:
             return
 
         # Build LowCmd
