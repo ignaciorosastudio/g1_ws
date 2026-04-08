@@ -55,16 +55,18 @@ G1_JOINT_INDEX = {
 KP = 60.0   # position gain
 KD = 1.5    # damping gain
 
-# Maximum joint speed (rad/s) — limits how fast any joint can move per tick.
-# At 200 Hz each tick is 5 ms, so 0.5 rad/s → max 0.0025 rad per tick.
-# Increase to allow faster animations; decrease for a slower, safer startup.
-MAX_JOINT_VEL  = 3.0    # rad/s — limits startup snap only; must exceed max animation velocity
-CONTROL_DT     = 0.005  # must match timer period
+MAX_JOINT_VEL   = 3.0    # rad/s   — hard cap; must exceed fastest animation segment velocity
+MAX_JOINT_ACCEL = 30.0   # rad/s²  — limits how quickly velocity can change; smooths large jumps
+CONTROL_DT      = 0.005  # s       — must match timer period
 
 # arm_sdk weight register — motor_cmd[29].q controls blending between
 # the locomotion controller's arm swing (0.0) and our commands (1.0).
 WEIGHT_JOINT       = 29
 WEIGHT_RAMP_STEPS  = 200   # steps to ramp weight down on shutdown (~1 s at 5 ms)
+
+# Joints excluded from arm_sdk commands in walking mode — left to the loco controller
+# for balance compensation during locomotion.
+WALKING_EXCLUDE = {"waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint"}
 
 
 class RobotPublisher(Node):
@@ -107,7 +109,7 @@ class RobotPublisher(Node):
         self._interp_mode = "linear"
         self._start_time  = time.time()
 
-        # Seed rate-limiter from live robot state; fall back to neutral in dry-run.
+        # Seed from live robot state; fall back to neutral in dry-run.
         if self._state is not None:
             self._prev_positions = [
                 self._state.motor_state[G1_JOINT_INDEX[j]].q
@@ -115,6 +117,7 @@ class RobotPublisher(Node):
             ]
         else:
             self._prev_positions = list(NEUTRAL)
+        self._prev_velocities = [0.0] * len(UPPER_BODY_JOINTS)
 
         self.get_logger().info(
             f"Idle — available clips: {', '.join(ANIMATIONS.keys())}"
@@ -136,11 +139,18 @@ class RobotPublisher(Node):
         self.create_service(Trigger, '/animation/stop', self._handle_stop)
 
     def _handle_play(self, request, response, name: str):
-        self._keyframes   = ANIMATIONS[name]["keyframes"]
-        self._interp_mode = ANIMATIONS[name]["interp"]
+        clip = ANIMATIONS[name]
+        blend_duration = 0.5
+        self._keyframes = [
+            {"time": 0.0,            "positions": list(self._prev_positions)},
+            {"time": blend_duration, "positions": clip["keyframes"][0]["positions"]},
+        ] + [
+            {"time": kf["time"] + blend_duration, "positions": kf["positions"]}
+            for kf in clip["keyframes"]
+        ]
+        self._interp_mode = clip["interp"]
         self._start_time  = time.time()
         self._playing     = True
-        # _prev_positions is intentionally kept — rate limiter smooths the transition
         response.success = True
         response.message = f"Playing '{name}'"
         self.get_logger().info(response.message)
@@ -290,17 +300,26 @@ class RobotPublisher(Node):
         # Stop looping once a non-looping clip finishes
         if not self._loop and elapsed >= self._keyframes[-1]["time"]:
             self._playing = False
+            self._prev_velocities = [0.0] * len(UPPER_BODY_JOINTS)
 
         target = self._interpolate(elapsed)
 
-        # Clamp each joint's step to MAX_JOINT_VEL * dt
-        max_delta    = MAX_JOINT_VEL * CONTROL_DT
-        old_positions = list(self._prev_positions)
-        positions     = []
-        for prev, tgt in zip(self._prev_positions, target):
-            delta = max(-max_delta, min(max_delta, tgt - prev))
-            positions.append(prev + delta)
-        self._prev_positions = positions
+        max_step = MAX_JOINT_VEL * CONTROL_DT    # hard velocity cap per tick
+        max_dv   = MAX_JOINT_ACCEL * CONTROL_DT  # max velocity change per tick
+
+        old_positions  = list(self._prev_positions)
+        positions      = []
+        new_velocities = []
+        for prev, tgt, prev_v in zip(self._prev_positions, target, self._prev_velocities):
+            # Desired step toward spline target, clamped by velocity limit
+            vel_capped = max(-max_step, min(max_step, tgt - prev))
+            # Further clamp by how much velocity can change in one tick
+            new_v = max(prev_v - max_dv, min(prev_v + max_dv, vel_capped))
+            positions.append(prev + new_v)
+            new_velocities.append(new_v)
+
+        self._prev_positions  = positions
+        self._prev_velocities = new_velocities
 
         if self._dry:
             js = JointState()
@@ -324,6 +343,8 @@ class RobotPublisher(Node):
             cmd.motor_cmd[WEIGHT_JOINT].q = 1.0
 
         for i, joint_name in enumerate(UPPER_BODY_JOINTS):
+            if self._mode == "walking" and joint_name in WALKING_EXCLUDE:
+                continue
             idx = G1_JOINT_INDEX.get(joint_name)
             if idx is None:
                 continue
@@ -349,6 +370,8 @@ class RobotPublisher(Node):
             # Hold last commanded positions so the blend transitions from our
             # pose to the loco controller's pose rather than snapping to zero.
             for i, joint_name in enumerate(UPPER_BODY_JOINTS):
+                if joint_name in WALKING_EXCLUDE:
+                    continue
                 idx = G1_JOINT_INDEX.get(joint_name)
                 if idx is None:
                     continue
