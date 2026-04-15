@@ -13,8 +13,8 @@ source ~/g1_ws/setup_local_env.sh
 ```
 
 Both set `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `ROS_DOMAIN_ID=0`, and the
-appropriate `CYCLONEDDS_URI`. The robot env pins CycloneDDS to `wlp48s0`
-(robot WiFi); the local env auto-selects interfaces for intra-machine comms.
+appropriate `CYCLONEDDS_URI`. The robot env pins CycloneDDS to `enp46s0`
+(robot ethernet); the local env auto-selects interfaces for intra-machine comms.
 
 > **Both terminals must source the same env** for the CLI to discover the node.
 
@@ -52,7 +52,7 @@ all upper-body joints directly via `rt/lowcmd`.
 ```bash
 source ~/g1_ws/setup_robot_env.sh
 ros2 launch g1_animation robot_deploy.launch.py \
-  network_interface:=wlp48s0 \
+  network_interface:=enp46s0 \
   mode:=damping \
   dry_run:=false \
   loop:=false
@@ -111,7 +111,7 @@ left to the loco controller for balance compensation during locomotion.
 
 ```bash
 source ~/g1_ws/setup_robot_env.sh
-ros2 launch g1pilot navigation_launcher.launch.py interface:=wlp48s0
+ros2 launch g1pilot navigation_launcher.launch.py interface:=enp46s0
 ```
 
 The node starts in **Damp** mode and prints FSM ID/Mode every second.
@@ -152,7 +152,7 @@ animations. Animations can also be triggered while the robot stands still.
 ```bash
 source ~/g1_ws/setup_robot_env.sh
 ros2 launch g1_animation robot_deploy.launch.py \
-  network_interface:=wlp48s0 \
+  network_interface:=enp46s0 \
   mode:=walking \
   dry_run:=false \
   loop:=false
@@ -236,8 +236,8 @@ Move the robot to each pose by hand and press Enter to capture it.
 
 ```bash
 source ~/g1_ws/setup_robot_env.sh
-python3 ~/g1_ws/scripts/record_poses.py wlp48s0
-python3 ~/g1_ws/scripts/record_poses.py wlp48s0 --spacing 0.5 --name my_clip
+python3 ~/g1_ws/scripts/record_poses.py enp46s0
+python3 ~/g1_ws/scripts/record_poses.py enp46s0 --spacing 0.5 --name my_clip
 ```
 
 | Key | Action |
@@ -262,8 +262,8 @@ Move the robot through the full motion while the script samples at a fixed rate.
 
 ```bash
 source ~/g1_ws/setup_robot_env.sh
-python3 ~/g1_ws/scripts/record_continuous.py wlp48s0
-python3 ~/g1_ws/scripts/record_continuous.py wlp48s0 --interval 0.05 --name wave --interp catmull_rom
+python3 ~/g1_ws/scripts/record_continuous.py enp46s0
+python3 ~/g1_ws/scripts/record_continuous.py enp46s0 --interval 0.05 --name wave --interp catmull_rom
 ```
 
 | Flag | Default | Description |
