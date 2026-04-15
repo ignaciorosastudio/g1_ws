@@ -2,7 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 
@@ -16,14 +16,6 @@ def generate_launch_description():
         robot_description = f.read()
 
     return LaunchDescription([
-        # Use local CycloneDDS config for all ROS2 communication.
-        # The hardware DDS (Unitree SDK) is independent and controlled by
-        # the network_interface parameter.
-        SetEnvironmentVariable(
-            'CYCLONEDDS_URI',
-            'file://' + os.path.expanduser('~/g1_ws/config/cyclonedds_local.xml')
-        ),
-
         DeclareLaunchArgument('network_interface', default_value='enp3s0',
                               description='Ethernet interface connected to G1'),
         DeclareLaunchArgument('dry_run', default_value='true',

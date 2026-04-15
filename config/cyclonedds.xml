@@ -6,12 +6,15 @@
   <Domain id="any">
     <General>
       <Interfaces>
-        <NetworkInterface name="enp46s0"/>
+        <NetworkInterface name="wlp48s0"/>
       </Interfaces>
       <AllowMulticast>default</AllowMulticast>
       <MaxMessageSize>65500B</MaxMessageSize>
     </General>
     <Discovery>
+      <Peers>
+        <Peer address="192.168.123.164"/>
+      </Peers>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>30</MaxAutoParticipantIndex>
     </Discovery>
