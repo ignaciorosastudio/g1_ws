@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition, UnlessCondition, LaunchConfigurationEquals
 
 
 def generate_launch_description():
@@ -36,8 +36,14 @@ def generate_launch_description():
                               description='Launch RViz and robot_state_publisher'),
         DeclareLaunchArgument('use_gui', default_value='false',
                               description='Use joint_state_publisher_gui instead of robot_publisher'),
+        DeclareLaunchArgument('transport', default_value='local',
+                              description='Transport: local (DDS) or wifi (TCP relay)'),
+        DeclareLaunchArgument('relay_host', default_value='192.168.0.123',
+                              description='Orin WiFi IP for relay (used when transport:=wifi)'),
+        DeclareLaunchArgument('relay_port', default_value='9870',
+                              description='Relay TCP port (used when transport:=wifi)'),
 
-        # Animation / robot control node
+        # Animation / robot control node — direct DDS (local transport)
         Node(
             package='g1_animation',
             executable='robot_publisher',
@@ -49,7 +55,23 @@ def generate_launch_description():
                 'mode':              LaunchConfiguration('mode'),
             }],
             output='screen',
-            condition=UnlessCondition(LaunchConfiguration('use_gui')),
+            condition=LaunchConfigurationEquals('transport', 'local'),
+        ),
+
+        # Animation / robot control node — WiFi relay transport
+        Node(
+            package='g1_animation',
+            executable='wifi_publisher',
+            name='wifi_publisher',
+            parameters=[{
+                'relay_host': LaunchConfiguration('relay_host'),
+                'relay_port': LaunchConfiguration('relay_port'),
+                'dry_run':    LaunchConfiguration('dry_run'),
+                'loop':       LaunchConfiguration('loop'),
+                'mode':       LaunchConfiguration('mode'),
+            }],
+            output='screen',
+            condition=LaunchConfigurationEquals('transport', 'wifi'),
         ),
 
         # Robot state publisher — needed by RViz to visualise the URDF

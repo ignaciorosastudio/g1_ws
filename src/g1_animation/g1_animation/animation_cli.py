@@ -68,7 +68,7 @@ class AnimationCLI(Node):
 
     def _get_param_client(self):
         """Return the parameter client for whichever animation node is running."""
-        for node_name in ('robot_publisher', 'animation_publisher'):
+        for node_name in ('robot_publisher', 'wifi_publisher', 'animation_publisher'):
             key = f'_param_client_{node_name}'
             if not hasattr(self, key):
                 setattr(self, key, self.create_client(

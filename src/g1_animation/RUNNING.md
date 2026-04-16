@@ -36,6 +36,7 @@ ros2 launch g1_animation robot_deploy.launch.py [args]
 | Deploy to robot (damping) | `ros2 launch g1_animation robot_deploy.launch.py dry_run:=false` |
 | Deploy to robot (walking) | `ros2 launch g1_animation robot_deploy.launch.py dry_run:=false mode:=walking` |
 | Deploy + loop animations | `ros2 launch g1_animation robot_deploy.launch.py dry_run:=false loop:=true` |
+| Deploy via WiFi relay | `ros2 launch g1_animation robot_deploy.launch.py transport:=wifi dry_run:=false mode:=walking` |
 
 RViz is always available — `robot_publisher` publishes `/joint_states` in both
 dry-run and live mode, so you can monitor commanded positions at all times.
@@ -189,6 +190,183 @@ Then shut down the loco stack.
 
 ---
 
+## Mode 3 — WiFi (animations over WiFi via Orin relay)
+
+When the PC is connected to the robot over WiFi instead of Ethernet, DDS
+cannot reach the MCU directly (addresses are embedded in DDS payloads and
+NAT cannot rewrite them). A lightweight relay on the Orin bridges the gap:
+the PC sends struct-packed motor commands over TCP, and the Orin forwards
+them to the MCU via DDS on its internal eth0 network.
+
+This mode works with both damping and walking, and is fully compatible with
+the Unitree Explore app for locomotion.
+
+### Orin relay installation (one-time setup)
+
+The relay runs on the G1's Orin (Jetson) companion computer. It needs
+Python 3.8+, `unitree_sdk2py`, and two relay scripts. The Orin runs
+Ubuntu 20.04 aarch64 — all steps below run over SSH.
+
+#### 1. SSH into the Orin
+
+Over WiFi:
+
+```bash
+ssh unitree@192.168.0.123
+```
+
+Or over Ethernet:
+
+```bash
+ssh unitree@192.168.123.164
+```
+
+Default password is `123` (Unitree factory default).
+
+#### 2. Check Python
+
+```bash
+python3 --version
+```
+
+Ubuntu 20.04 ships with Python 3.8. Anything 3.8+ works.
+
+#### 3. Install pip (if missing)
+
+```bash
+python3 -m pip --version
+```
+
+If pip is not installed:
+
+```bash
+sudo apt update && sudo apt install -y python3-pip
+```
+
+#### 4. Install unitree_sdk2py
+
+```bash
+pip3 install unitree_sdk2py==1.0.1
+```
+
+This pulls in `cyclonedds` and `numpy` automatically. If the install
+fails (e.g. no pre-built wheel for aarch64), use the fallback below.
+
+**Fallback — copy from PC:**
+
+On your PC, find where the packages are installed:
+
+```bash
+python3 -c "import unitree_sdk2py; print(unitree_sdk2py.__path__[0])"
+python3 -c "import cyclonedds; print(cyclonedds.__path__[0])"
+```
+
+Then copy them to the Orin:
+
+```bash
+# From your PC
+scp -r /usr/local/lib/python3.10/dist-packages/unitree_sdk2py unitree@192.168.0.123:~/
+scp -r ~/.local/lib/python3.10/site-packages/cyclonedds unitree@192.168.0.123:~/
+```
+
+On the Orin, move them into the Python path:
+
+```bash
+sudo mv ~/unitree_sdk2py /usr/local/lib/python3.8/dist-packages/
+sudo mv ~/cyclonedds /usr/local/lib/python3.8/dist-packages/
+```
+
+> Adjust the Python version in the path if the Orin has a different version.
+
+#### 5. Verify the SDK
+
+```bash
+python3 -c "from unitree_sdk2py.core.channel import ChannelPublisher; print('OK')"
+```
+
+You should see `OK`. If you get an import error about `cyclonedds`,
+install it separately: `pip3 install cyclonedds==0.10.2`.
+
+#### 6. Copy the relay scripts
+
+From your PC:
+
+```bash
+scp ~/g1_ws/src/g1_animation/g1_animation/wifi_relay_server.py unitree@192.168.0.123:~/
+scp ~/g1_ws/src/g1_animation/g1_animation/wifi_relay_protocol.py unitree@192.168.0.123:~/
+```
+
+#### 7. Test-run the relay
+
+```bash
+python3 ~/wifi_relay_server.py --interface eth0
+```
+
+You should see:
+
+```
+[relay] INFO: DDS publishers ready on interface eth0
+[relay] INFO: Waiting for robot state...
+[relay] INFO: Robot state received
+[relay] INFO: Listening on 0.0.0.0:9870
+```
+
+If the robot is off or not in the right mode, the "robot state" line will
+show a warning instead — that's fine, the relay still works.
+
+Press Ctrl+C to stop. The relay is now installed and ready.
+
+> **Updating the relay:** After code changes, just re-run the two `scp`
+> commands in step 6 and restart the relay.
+
+---
+
+### Step 1 — Start the relay on the Orin
+
+SSH into the Orin and run the relay server:
+
+```bash
+ssh unitree@192.168.0.123
+python3 ~/wifi_relay_server.py --interface eth0
+```
+
+The relay listens on TCP port 9870. It creates DDS publishers for both
+`rt/lowcmd` and `rt/arm_sdk` and waits for a connection.
+
+### Step 2 — Launch the animation node on the PC
+
+```bash
+source ~/g1_ws/setup_local_env.sh
+ros2 launch g1_animation robot_deploy.launch.py \
+  transport:=wifi \
+  mode:=walking \
+  dry_run:=false \
+  loop:=false
+```
+
+The default relay address is `192.168.0.123:9870` (the Orin's WiFi IP).
+Override with `relay_host:=<ip>` and `relay_port:=<port>` if needed.
+
+> Use `setup_local_env.sh` (not `setup_robot_env.sh`) since the PC is not
+> on the robot's ethernet network.
+
+### Step 3 — Control via CLI
+
+Same as any other mode:
+
+```bash
+source ~/g1_ws/setup_local_env.sh
+ros2 run g1_animation animation_cli
+```
+
+### Step 4 — Shutdown
+
+Press **Ctrl+C** on the PC node. If in walking mode, the PC sends a stop
+message and the Orin performs the arm weight ramp-down locally (this must
+happen at DDS speed, not over WiFi). Then Ctrl+C the relay on the Orin.
+
+---
+
 ## Dry-run (no robot required)
 
 Test the full command pipeline against RViz without touching the robot.
@@ -308,10 +486,13 @@ No rebuild required.
 
 ## Parameters
 
-| Parameter           | Default    | Description                                       |
-|---------------------|------------|---------------------------------------------------|
-| `network_interface` | `enp3s0`   | Ethernet interface to the robot                   |
-| `mode`              | `damping`  | `damping` (static, rt/lowcmd) or `walking` (rt/arm_sdk) |
-| `loop`              | `false`    | Loop clips when playing                           |
-| `dry_run`           | `true`     | Publish /joint_states only, do not send to robot  |
-| `speed`             | `1.0`      | Playback speed multiplier (settable via CLI)      |
+| Parameter           | Default          | Description                                       |
+|---------------------|------------------|---------------------------------------------------|
+| `network_interface` | `enp3s0`         | Ethernet interface to the robot                   |
+| `mode`              | `damping`        | `damping` (static, rt/lowcmd) or `walking` (rt/arm_sdk) |
+| `loop`              | `false`          | Loop clips when playing                           |
+| `dry_run`           | `true`           | Publish /joint_states only, do not send to robot  |
+| `speed`             | `1.0`            | Playback speed multiplier (settable via CLI)      |
+| `transport`         | `local`          | `local` (direct DDS) or `wifi` (TCP relay via Orin) |
+| `relay_host`        | `192.168.0.123`  | Orin WiFi IP (only used when transport:=wifi)     |
+| `relay_port`        | `9870`           | Relay TCP port (only used when transport:=wifi)   |
