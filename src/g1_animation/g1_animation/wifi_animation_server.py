@@ -11,6 +11,7 @@ Usage:
 import argparse
 import json
 import logging
+import signal
 import socket
 import threading
 import time
@@ -116,9 +117,20 @@ def load_clips(clips_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 class AnimationEngine:
-    """Clip playback with interpolation and velocity/accel capping."""
+    """Clip playback with interpolation and velocity/accel capping.
 
-    def __init__(self, clips: dict, initial_positions: list = None):
+    Tracks an arm_sdk weight that is 0 while idle and 1 while a clip is
+    playing, ramped smoothly each direction. The control loop reads
+    ``engine.weight`` every tick and publishes it in motor_cmd[29].q.
+    """
+
+    def __init__(
+        self,
+        clips: dict,
+        initial_positions=None,
+        live_positions_fn=None,
+        max_weight: float = 1.0,
+    ):
         self._clips = clips
         self._speed = 1.0
         self._loop = False
@@ -130,11 +142,39 @@ class AnimationEngine:
         self._start_time = time.monotonic()
         self._current_positions = list(initial_positions or NEUTRAL)
         self._prev_velocities = [0.0] * NUM_JOINTS
+        self._weight = 0.0
+        self._target_weight = 0.0
+        self._max_weight = max(0.0, min(1.0, max_weight))
+        self._weight_step = 1.0 / WEIGHT_RAMP_STEPS
+        self._live_positions_fn = live_positions_fn
         self._lock = threading.Lock()
 
     @property
     def status(self) -> str:
         return self._current_clip or "idle"
+
+    @property
+    def weight(self) -> float:
+        return self._weight
+
+    def set_max_weight(self, val: float) -> str:
+        if not 0.0 <= val <= 1.0:
+            return "ERR weight must be in [0.0, 1.0]"
+        with self._lock:
+            self._max_weight = val
+            if self._playing:
+                self._target_weight = val
+        return f"OK max weight set to {val:.2f}"
+
+    def _reseed_from_live(self):
+        # Called under self._lock when idle→playing; loco controller has
+        # been driving the arms, so our cached _current_positions is stale.
+        if self._live_positions_fn is None:
+            return
+        live = self._live_positions_fn()
+        if live is not None:
+            self._current_positions = list(live)
+            self._prev_velocities = [0.0] * NUM_JOINTS
 
     def play(self, name: str) -> str:
         if name not in self._clips:
@@ -147,6 +187,8 @@ class AnimationEngine:
             if len(kf["positions"]) != NUM_JOINTS:
                 return f"ERR [{name}] keyframe {i}: expected {NUM_JOINTS} positions, got {len(kf['positions'])}"
         with self._lock:
+            if not self._playing:
+                self._reseed_from_live()
             self._queued_animation = name
             self._keyframes = [
                 {"time": 0.0, "positions": list(self._current_positions)},
@@ -156,10 +198,13 @@ class AnimationEngine:
             self._start_time = time.monotonic()
             self._loop = False
             self._playing = True
+            self._target_weight = self._max_weight
         return f"OK Queued '{name}' — blending to neutral first"
 
     def stop(self) -> str:
         with self._lock:
+            if not self._playing:
+                self._reseed_from_live()
             self._queued_animation = None
             self._keyframes = [
                 {"time": 0.0, "positions": list(self._current_positions)},
@@ -169,7 +214,16 @@ class AnimationEngine:
             self._start_time = time.monotonic()
             self._loop = False
             self._playing = True
+            self._target_weight = self._max_weight
         return "OK Stopping — blending to neutral"
+
+    def request_shutdown(self):
+        """Stop playback and begin ramping weight to 0."""
+        with self._lock:
+            self._queued_animation = None
+            self._playing = False
+            self._current_clip = None
+            self._target_weight = 0.0
 
     def set_speed(self, val: float) -> str:
         if val <= 0:
@@ -238,6 +292,14 @@ class AnimationEngine:
                 self._prev_velocities = [0.0] * NUM_JOINTS
         else:
             positions = old_positions
+
+        if not self._playing:
+            self._target_weight = 0.0
+
+        if self._weight < self._target_weight:
+            self._weight = min(self._target_weight, self._weight + self._weight_step)
+        elif self._weight > self._target_weight:
+            self._weight = max(self._target_weight, self._weight - self._weight_step)
 
         return positions, old_positions
 
@@ -335,7 +397,7 @@ class DDSBridge:
             for j in UPPER_BODY_JOINTS
         ]
 
-    def publish_cmd(self, positions: list, old_positions: list):
+    def publish_cmd(self, positions: list, old_positions: list, weight: float = 1.0):
         cmd = unitree_hg_msg_dds__LowCmd_()
         walking = self._mode == "walking"
 
@@ -343,7 +405,7 @@ class DDSBridge:
             cmd.mode_pr = 0
             cmd.mode_machine = self._state.mode_machine if self._state else 0
         else:
-            cmd.motor_cmd[WEIGHT_JOINT].q = 1.0
+            cmd.motor_cmd[WEIGHT_JOINT].q = weight
 
         for i, name in enumerate(UPPER_BODY_JOINTS):
             if walking and name in WALKING_EXCLUDE:
@@ -361,28 +423,6 @@ class DDSBridge:
         pub = self._pub_walking if walking else self._pub_damping
         pub.Write(cmd)
 
-    def release_walking_mode(self, last_positions: list):
-        if self._mode != "walking":
-            return
-        log.info("Releasing walking mode — ramping weight to 0...")
-        for step in range(WEIGHT_RAMP_STEPS, -1, -1):
-            cmd = unitree_hg_msg_dds__LowCmd_()
-            cmd.motor_cmd[WEIGHT_JOINT].q = step / WEIGHT_RAMP_STEPS
-            for i, name in enumerate(UPPER_BODY_JOINTS):
-                if name in WALKING_EXCLUDE:
-                    continue
-                idx = G1_JOINT_INDEX[name]
-                motor = cmd.motor_cmd[idx]
-                motor.q = last_positions[i]
-                motor.dq = 0.0
-                motor.tau = 0.0
-                motor.kp = KP
-                motor.kd = KD
-            cmd.crc = self._crc.Crc(cmd)
-            self._pub_walking.Write(cmd)
-            time.sleep(CONTROL_DT)
-        log.info("Walking mode released")
-
 
 # ---------------------------------------------------------------------------
 # 200 Hz control loop
@@ -395,7 +435,7 @@ def control_loop(engine: AnimationEngine, bridge: DDSBridge):
     while _running:
         t0 = time.monotonic()
         positions, old_positions = engine.tick()
-        bridge.publish_cmd(positions, old_positions)
+        bridge.publish_cmd(positions, old_positions, engine.weight)
         elapsed = time.monotonic() - t0
         time.sleep(max(0, CONTROL_DT - elapsed))
 
@@ -454,6 +494,15 @@ def dispatch(cmd: str, engine: AnimationEngine, clips: dict) -> str:
         log.info("speed %s → %s", parts[1], resp)
         return resp
 
+    elif verb == "weight" and len(parts) >= 2:
+        try:
+            val = float(parts[1])
+        except ValueError:
+            return "ERR invalid weight value"
+        resp = engine.set_max_weight(val)
+        log.info("weight %s → %s", parts[1], resp)
+        return resp
+
     elif verb == "loop" and len(parts) >= 2:
         val = parts[1].lower() in ("true", "1", "on", "yes")
         return engine.set_loop(val)
@@ -506,7 +555,13 @@ def main():
                         help="Directory containing clip .json files")
     parser.add_argument("--mode", default="walking", choices=["damping", "walking"],
                         help="Control mode (default: walking)")
+    parser.add_argument("--weight", type=float, default=1.0,
+                        help="Max arm_sdk weight in [0.0, 1.0]. Lower values blend "
+                             "with the loco controller's arm swing so walking/running "
+                             "stays enabled while clips play (default: 1.0)")
     args = parser.parse_args()
+    if not 0.0 <= args.weight <= 1.0:
+        parser.error("--weight must be in [0.0, 1.0]")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -523,11 +578,19 @@ def main():
     # Init DDS
     bridge = DDSBridge(args.interface, args.mode)
 
-    # Init animation engine — seed from live robot state if available
+    # Init animation engine — seed from live robot state if available,
+    # and let the engine re-read live state on each idle→playing transition
+    # (arms move under loco control while weight=0, so cached positions go stale).
     initial = bridge.get_initial_positions()
     if initial:
         log.info("Seeded positions from live robot state")
-    engine = AnimationEngine(clips, initial_positions=initial)
+    engine = AnimationEngine(
+        clips,
+        initial_positions=initial,
+        live_positions_fn=bridge.get_initial_positions,
+        max_weight=args.weight,
+    )
+    log.info("Max arm_sdk weight = %.2f", args.weight)
 
     # Start 200 Hz control loop in background thread
     ctrl_thread = threading.Thread(
@@ -536,15 +599,28 @@ def main():
     ctrl_thread.start()
     log.info("200 Hz control loop started (mode=%s)", args.mode)
 
+    # SIGTERM (from `systemctl stop`) must reach the same shutdown path as
+    # Ctrl+C so the weight ramp runs. Raising KeyboardInterrupt from the
+    # handler unblocks socket.accept() on the main thread.
+    def _on_term(*_):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, _on_term)
+
     # Run TCP command server in main thread
     try:
         serve(args.port, engine, clips)
     except KeyboardInterrupt:
         pass
     finally:
+        log.info("Shutdown requested — ramping arm_sdk weight to 0...")
+        engine.request_shutdown()
+        deadline = time.monotonic() + 2.0
+        while engine.weight > 0.01 and time.monotonic() < deadline:
+            time.sleep(0.01)
         _running = False
-        bridge.release_walking_mode(engine._current_positions)
-        log.info("Shutdown complete")
+        time.sleep(CONTROL_DT * 4)  # let control loop publish the final weight=0 frames
+        log.info("Shutdown complete (weight=%.3f)", engine.weight)
 
 
 if __name__ == "__main__":

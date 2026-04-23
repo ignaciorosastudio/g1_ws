@@ -480,7 +480,7 @@ No rebuild required.
 
 | Parameter           | Default          | Description                                       |
 |---------------------|------------------|---------------------------------------------------|
-| `network_interface` | `enp3s0`         | Ethernet interface to the robot                   |
+| `network_interface` | `enp46s0`        | Ethernet interface to the robot                   |
 | `mode`              | `damping`        | `damping` (static, rt/lowcmd) or `walking` (rt/arm_sdk) |
 | `loop`              | `false`          | Loop clips when playing                           |
 | `dry_run`           | `true`           | Publish /joint_states only, do not send to robot  |

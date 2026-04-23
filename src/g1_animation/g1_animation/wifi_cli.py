@@ -58,7 +58,7 @@ def main(args=None):
     except Exception as e:
         print(f"Connected, but failed to list clips: {e}")
 
-    print("Commands: <clip_name> | stop | list | speed <value> | loop on/off | status | quit\n")
+    print("Commands: <clip_name> | stop | list | speed <val> | weight <0..1> | loop on/off | status | quit\n")
 
     while True:
         try:
@@ -76,7 +76,7 @@ def main(args=None):
         # Map bare clip names to "play <name>"
         parts = cmd.split()
         verb = parts[0].lower()
-        if verb not in ("play", "stop", "speed", "loop", "list", "status"):
+        if verb not in ("play", "stop", "speed", "weight", "loop", "list", "status"):
             cmd = f"play {cmd}"
 
         try:
