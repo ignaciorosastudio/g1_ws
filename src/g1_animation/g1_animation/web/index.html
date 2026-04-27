@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>G1 Console</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="title">G1 Console</div>
+    <div class="status-bar">
+      <span id="conn" class="conn">connecting…</span>
+      <span class="sep">·</span>
+      <span>now: <strong id="current">—</strong></span>
+      <span class="sep">·</span>
+      <span>latency: <strong id="latency">—</strong> ms</span>
+      <span class="sep">·</span>
+      <span>speed: <strong id="speed-readout">1.00×</strong></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="controls">
+      <button id="stop-btn" class="stop">
+        <span>STOP</span>
+        <span class="key">SPACE</span>
+      </button>
+      <div class="speed">
+        <label for="speed">Speed</label>
+        <input id="speed" type="range" min="0.5" max="1.5" step="0.05" value="1.0">
+        <button id="speed-reset" class="ghost" title="reset to 1.0×">reset</button>
+      </div>
+    </section>
+
+    <section id="grid" class="grid"></section>
+
+    <p class="hint">
+      Click a tile or press its key. <kbd>Space</kbd> = stop &amp; blend to neutral.
+    </p>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

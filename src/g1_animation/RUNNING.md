@@ -350,6 +350,36 @@ animation> quit
 
 Override the default host with `--host <ip>` and `--port <port>`.
 
+### Step 2 (alternative) — Browser console
+
+Instead of the CLI, you can run a browser-based console for live event
+operation. It exposes every clip as a clickable tile with auto-assigned
+keyboard shortcuts, a big STOP button (Space), a speed slider, and a
+status bar showing connection / current clip / latency.
+
+Start the local console server (no extra dependencies — pure stdlib):
+
+```bash
+python3 ~/g1_ws/src/g1_animation/g1_animation/console_server.py \
+    --host 192.168.0.123
+```
+
+A browser window opens automatically at **http://127.0.0.1:8080/**.
+Pass `--no-browser` to suppress this.
+
+The console server holds a persistent TCP connection to the Orin and
+auto-reconnects on drop. Both the CLI and the browser console can be
+used interchangeably; only one Orin connection at a time is supported,
+so don't run both pointed at the same robot.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host` | `192.168.0.123` | Orin animation server host |
+| `--port` | `9870` | Orin animation server port |
+| `--listen` | `127.0.0.1` | Local HTTP bind address (`0.0.0.0` to expose on LAN) |
+| `--http-port` | `8080` | Local HTTP port |
+| `--no-browser` | _(off)_ | Don't open a browser window on startup |
+
 ### Step 3 — Shutdown
 
 Press **Ctrl+C** on the server. If in walking mode, it automatically ramps
