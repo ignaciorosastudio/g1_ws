@@ -379,6 +379,80 @@ so don't run both pointed at the same robot.
 | `--listen` | `127.0.0.1` | Local HTTP bind address (`0.0.0.0` to expose on LAN) |
 | `--http-port` | `8080` | Local HTTP port |
 | `--no-browser` | _(off)_ | Don't open a browser window on startup |
+| `--cues` | `~/g1_ws/cues.json` | Path to the cue list JSON (see below) |
+
+#### Cue list (timeline panel)
+
+The console includes a scrubbable timeline driven by a JSON cue list.
+Each cue has a time on the timeline and a clip to associate with it.
+**Auto-fire is OFF by default** — cues act as a prompter (countdown +
+clip name) and the operator pulls the trigger by hitting the tile.
+Toggle **Auto-fire** in the timeline header to make cues fire
+themselves as the playhead crosses them.
+
+Place the cue file at `~/g1_ws/cues.json` (or pass `--cues PATH`):
+
+```json
+{
+  "name": "Rehearsal v1",
+  "duration": 180.0,
+  "cues": [
+    {"t": 5.0,      "clip": "wave",   "label": "intro"},
+    {"t": "0:12.5", "clip": "arms",   "speed": 0.8, "preroll": 0.3},
+    {"t": 90.0,     "action": "stop", "label": "calm"},
+    {"t": 120.5,    "clip": "typing", "label": "verse"}
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string (optional) | Shown in the timeline header. |
+| `duration` | float (optional) | Show length in seconds. Defaults to last cue + 1s. |
+| `cues[].t` | float or `"M:SS.s"` | Cue time, in seconds or `MM:SS.s` form. |
+| `cues[].clip` | string | Clip to play (omitted for `stop` cues). |
+| `cues[].action` | `"play"` (default) or `"stop"` | What the cue does when fired. |
+| `cues[].label` | string (optional) | Display label; falls back to the clip name. |
+| `cues[].speed` | float (optional) | Speed multiplier applied before play. |
+| `cues[].preroll` | float (optional) | Fire this many seconds before `t` (auto-fire only). |
+
+The cue file can be edited freely while the console is running — hit
+**Reload** in the timeline header to re-read it without restarting.
+Scrubbing or rewinding never fires cues; cues only fire when **playing
+with auto-fire on**, and only once per run (rewind to re-arm).
+
+##### Operator-fire hotkey
+
+Press <kbd>Enter</kbd> to fire the **closest unfired cue** to the
+playhead — works for both early triggering (cue is upcoming, you fire
+slightly before its mark) and late triggering (you missed the mark by
+a beat). The NEXT readout always reflects what <kbd>Enter</kbd> would
+fire; the countdown shows `in M:SS.s` for upcoming cues and
+`M:SS.s late` for cues already past.
+
+In manual (auto-fire OFF) playback, cues stay fireable as the playhead
+rolls past — that's what makes late-firing work. Scrubbing forward,
+on the other hand, marks skipped cues as fired (it's an explicit jump);
+rewind re-arms everything.
+
+##### Edit mode (rehearsal)
+
+Toggle **Edit** in the timeline header to author the cue list live:
+
+- **Drag a marker** along the ruler to retime its cue.
+- **Click a marker** to select it; the **EDITING** row appears with
+  `clip` and `label` fields you can rename. The `clip` field offers an
+  autocomplete from the connected robot's clip list.
+- The **Save** button (turns green when you have unsaved changes)
+  writes the cue list back to disk via `POST /api/cues`. The previous
+  on-disk version is copied to `<cues>.bak` before each save, and the
+  new file is written atomically.
+- **Reload** discards in-memory edits (with a confirm prompt if dirty)
+  and re-reads from disk. Closing the tab with unsaved changes also
+  prompts.
+
+Edit mode is independent of auto-fire — you can rehearse with auto-fire
+on and toggle edit when you want to nudge a cue, then save.
 
 ### Step 3 — Shutdown
 

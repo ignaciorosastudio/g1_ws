@@ -36,8 +36,57 @@
     <section id="grid" class="grid"></section>
 
     <p class="hint">
-      Click a tile or press its key. <kbd>Space</kbd> = stop &amp; blend to neutral.
+      Click a tile or press its key. <kbd>Space</kbd> = stop. <kbd>Enter</kbd> = fire closest cue.
     </p>
+
+    <section class="timeline-panel">
+      <div class="transport">
+        <button id="t-rewind" class="t-btn" title="Rewind to 0:00">⏮</button>
+        <button id="t-play"   class="t-btn" title="Play">▶</button>
+        <button id="t-pause"  class="t-btn" title="Pause">❚❚</button>
+        <span class="clock">
+          <strong id="clock">0:00.0</strong>
+          <span class="dur-sep">/</span>
+          <span id="duration">—</span>
+        </span>
+        <span id="show-name" class="show-name">—</span>
+        <label class="autofire" id="autofire-label">
+          <input id="autofire" type="checkbox">
+          <span>Auto-fire</span>
+        </label>
+        <label class="autofire editmode-label" id="editmode-label">
+          <input id="editmode" type="checkbox">
+          <span>Edit</span>
+        </label>
+        <button id="reload-cues" class="ghost" title="Re-read cues from disk">Reload</button>
+        <button id="save-cues" class="ghost save-btn" title="Write cues to disk" hidden>Save</button>
+      </div>
+
+      <div class="next-cue">
+        <span class="next-label">NEXT</span>
+        <span class="next-name" id="next-name">—</span>
+        <span class="next-meta" id="next-meta"></span>
+        <span class="next-in" id="next-in"></span>
+      </div>
+
+      <div class="edit-row" id="edit-row" hidden>
+        <span class="edit-label">EDITING</span>
+        <span class="edit-time" id="edit-time">—</span>
+        <input type="text" id="edit-clip"  placeholder="clip"  list="clip-list" autocomplete="off">
+        <input type="text" id="edit-label" placeholder="label" autocomplete="off">
+        <button id="edit-deselect" class="ghost" title="Deselect">×</button>
+      </div>
+      <datalist id="clip-list"></datalist>
+
+      <div class="timeline">
+        <div class="ruler" id="ruler">
+          <div class="markers" id="markers"></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+      </div>
+
+      <p id="cue-warning" class="warning" hidden></p>
+    </section>
   </main>
 
   <script src="app.js"></script>

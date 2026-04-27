@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 DEFAULT_ORIN_HOST = "192.168.0.123"
 DEFAULT_ORIN_PORT = 9870
 DEFAULT_HTTP_PORT = 8080
+DEFAULT_CUES_PATH = Path.home() / "g1_ws" / "cues.json"
 WEB_DIR = (Path(__file__).parent / "web").resolve()
 STATUS_POLL_HZ = 4
 RECONNECT_MIN_S = 0.5
@@ -39,6 +40,68 @@ RECONNECT_MAX_S = 5.0
 SSE_KEEPALIVE_S = 15.0
 
 log = logging.getLogger("console")
+
+
+def parse_time(v) -> float:
+    """Accept either a float (seconds) or 'M:SS.s' / 'H:MM:SS.s' string."""
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if ":" in s:
+            parts = s.split(":")
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        return float(s)
+    raise ValueError(f"bad time value: {v!r}")
+
+
+def load_cues(path: Path) -> dict:
+    """Read and validate the cue list JSON. Always returns a dict; on
+    error, returns an empty list with a 'warning' field for the UI."""
+    if not path.is_file():
+        return {"name": None, "duration": 0.0, "cues": [],
+                "warning": f"cue file not found: {path}",
+                "path": str(path)}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        return {"name": None, "duration": 0.0, "cues": [],
+                "warning": f"failed to read cues: {e}",
+                "path": str(path)}
+
+    cues_out = []
+    for i, raw in enumerate(data.get("cues", [])):
+        try:
+            t = parse_time(raw["t"])
+        except (KeyError, ValueError) as e:
+            log.warning("cue %d: skipped (%s)", i, e)
+            continue
+        cue = {
+            "t": t,
+            "action": raw.get("action", "play"),
+        }
+        if "clip"    in raw: cue["clip"]    = str(raw["clip"])
+        if "label"   in raw: cue["label"]   = str(raw["label"])
+        if "speed"   in raw:
+            try: cue["speed"] = float(raw["speed"])
+            except (TypeError, ValueError): pass
+        if "preroll" in raw:
+            try: cue["preroll"] = max(0.0, float(raw["preroll"]))
+            except (TypeError, ValueError): pass
+        cues_out.append(cue)
+    cues_out.sort(key=lambda c: c["t"])
+
+    last_t = cues_out[-1]["t"] if cues_out else 0.0
+    duration = float(data.get("duration", last_t + 1.0))
+    return {
+        "name": data.get("name"),
+        "duration": duration,
+        "cues": cues_out,
+        "path": str(path),
+    }
 
 
 class OrinClient:
@@ -189,6 +252,7 @@ class OrinClient:
 
 
 CLIENT: OrinClient  # set in main()
+CUES_PATH: Path     # set in main()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -237,6 +301,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/state":
             self._send_json(200, CLIENT.snapshot())
             return
+        if url.path == "/api/cues":
+            self._send_json(200, load_cues(CUES_PATH))
+            return
         rel = url.path.lstrip("/") or "index.html"
         target = (WEB_DIR / rel).resolve()
         try:
@@ -256,6 +323,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "error": "invalid JSON"})
             return
 
+        if url.path == "/api/cues":
+            self._handle_save_cues(data)
+            return
+
         cmd = self._build_cmd(url.path, data)
         if cmd is None:
             self._send_json(400, {"ok": False, "error": "bad request"})
@@ -270,6 +341,50 @@ class Handler(BaseHTTPRequestHandler):
         ok = resp.startswith("OK")
         msg = resp.removeprefix("OK ").removeprefix("ERR ")
         self._send_json(200 if ok else 400, {"ok": ok, "msg": msg, "raw": resp})
+
+    def _handle_save_cues(self, data):
+        if not isinstance(data, dict) or not isinstance(data.get("cues"), list):
+            self._send_json(400, {"ok": False, "error": "missing 'cues' array"})
+            return
+        try:
+            validated = []
+            for raw in data["cues"]:
+                if not isinstance(raw, dict):
+                    continue
+                t = parse_time(raw["t"])
+                cue = {"t": t, "action": raw.get("action", "play")}
+                for f in ("clip", "label"):
+                    if raw.get(f):
+                        cue[f] = str(raw[f])
+                for f in ("speed", "preroll"):
+                    if f in raw:
+                        try:
+                            cue[f] = float(raw[f])
+                        except (TypeError, ValueError):
+                            pass
+                validated.append(cue)
+            validated.sort(key=lambda c: c["t"])
+
+            out = {"duration": float(data.get("duration", 0)), "cues": validated}
+            if data.get("name"):
+                out = {"name": str(data["name"]), **out}
+
+            CUES_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if CUES_PATH.is_file():
+                bak = CUES_PATH.with_suffix(CUES_PATH.suffix + ".bak")
+                bak.write_bytes(CUES_PATH.read_bytes())
+            tmp = CUES_PATH.with_suffix(CUES_PATH.suffix + ".tmp")
+            tmp.write_text(json.dumps(out, indent=2) + "\n")
+            tmp.replace(CUES_PATH)
+
+            log.info("Saved %d cues to %s", len(validated), CUES_PATH)
+            self._send_json(200, {"ok": True, "saved": len(validated),
+                                  "path": str(CUES_PATH)})
+        except (KeyError, ValueError) as e:
+            self._send_json(400, {"ok": False, "error": f"invalid cue: {e}"})
+        except OSError as e:
+            log.exception("Failed to write cues")
+            self._send_json(500, {"ok": False, "error": f"write failed: {e}"})
 
     def _build_cmd(self, path: str, data: dict) -> str | None:
         if path == "/api/play":
@@ -315,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global CLIENT
+    global CLIENT, CUES_PATH
 
     parser = argparse.ArgumentParser(description="G1 console server")
     parser.add_argument("--host", default=DEFAULT_ORIN_HOST,
@@ -328,6 +443,8 @@ def main():
                         help=f"Local HTTP port (default: {DEFAULT_HTTP_PORT})")
     parser.add_argument("--no-browser", action="store_true",
                         help="Don't open a browser window on startup")
+    parser.add_argument("--cues", default=str(DEFAULT_CUES_PATH),
+                        help=f"Path to cue list JSON (default: {DEFAULT_CUES_PATH})")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -338,6 +455,9 @@ def main():
     if not WEB_DIR.is_dir():
         log.error("Web directory not found at %s", WEB_DIR)
         return 1
+
+    CUES_PATH = Path(args.cues).expanduser()
+    log.info("Cues path:    %s", CUES_PATH)
 
     CLIENT = OrinClient(args.host, args.port)
     CLIENT.start()
