@@ -202,6 +202,78 @@ This mode is fully compatible with the Unitree Explore app for locomotion.
 The animation server sends arm commands via `rt/arm_sdk` while the Explore
 app controls the legs.
 
+### Networking — get the laptop talking to the Orin (one-time setup)
+
+The Orin and the laptop need to be on the same WiFi network and able to
+find each other by name. This setup uses **mDNS (avahi)** so the Orin
+becomes reachable as `g1-orin.local` regardless of which DHCP IP it
+gets — no router admin or static-IP juggling required, and it survives
+network changes (home → venue → office) automatically.
+
+#### 1. Get the Orin onto your WiFi
+
+The factory G1 image doesn't auto-join arbitrary networks. The simplest
+path is to SSH in over ethernet first (this works regardless of WiFi
+state) and add the network with NetworkManager:
+
+```bash
+# Plug PC ↔ robot ethernet, then from the laptop:
+ssh unitree@192.168.123.164
+# password: 123 (Unitree factory default)
+```
+
+Then on the Orin:
+
+```bash
+sudo nmcli device wifi list                                # confirm SSID is visible
+sudo nmcli device wifi connect '<SSID>' password '<PASS>'
+sudo nmcli connection modify '<SSID>' connection.autoconnect yes
+ip -4 addr show wlan0                                      # confirm wlan0 has an IP
+```
+
+The Orin will rejoin this network automatically on every boot.
+
+#### 2. Install and enable avahi on the Orin
+
+Still in the same SSH session:
+
+```bash
+sudo apt install -y avahi-daemon libnss-mdns
+sudo systemctl enable --now avahi-daemon
+```
+
+Give the Orin a less-generic hostname (the factory image ships with
+just `ubuntu`, which collides with anything else on the LAN named the
+same):
+
+```bash
+sudo hostnamectl set-hostname g1-orin
+sudo systemctl restart avahi-daemon
+```
+
+#### 3. Verify from the laptop
+
+Desktop Ubuntu ships avahi + `libnss-mdns` by default. From the laptop:
+
+```bash
+getent hosts g1-orin.local        # should print the Orin's WiFi IP
+ping -c 2 g1-orin.local
+ssh unitree@g1-orin.local
+```
+
+If those work, you can use `g1-orin.local` anywhere an IP would go —
+SSH, `scp`, `--host` flags, etc. The hostname resolves to the current
+DHCP lease, so changing IPs no longer matters.
+
+> **Troubleshooting:** if `getent hosts g1-orin.local` returns nothing,
+> confirm `mdns4_minimal [NOTFOUND=return]` is on the `hosts:` line in
+> `/etc/nsswitch.conf` (Ubuntu's default). Some hotel/conference WiFi
+> networks block multicast — there, fall back to the IP directly
+> (`nmap -sn <your-subnet>` to find it) or set up a DHCP reservation
+> on the router for the Orin's MAC.
+
+---
+
 ### Orin server installation (one-time setup)
 
 The animation server runs on the G1's Orin (Jetson) companion computer.
@@ -210,10 +282,10 @@ The Orin runs Ubuntu 20.04 aarch64 — all steps below run over SSH.
 
 #### 1. SSH into the Orin
 
-Over WiFi:
+Over WiFi (assumes the mDNS setup above):
 
 ```bash
-ssh unitree@192.168.0.123
+ssh unitree@g1-orin.local
 ```
 
 Or over Ethernet:
@@ -266,7 +338,7 @@ sudo mkdir -p /usr/local/lib/python3.8/dist-packages/unitree_sdk2py/utils/lib
 
 # From your PC
 scp ~/g1_ws/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so \
-    unitree@192.168.0.123:/usr/local/lib/python3.8/dist-packages/unitree_sdk2py/utils/lib/
+    unitree@g1-orin.local:/usr/local/lib/python3.8/dist-packages/unitree_sdk2py/utils/lib/
 ```
 
 #### 5. Verify the SDK
@@ -283,8 +355,8 @@ check step 4.
 From your PC:
 
 ```bash
-scp ~/g1_ws/src/g1_animation/g1_animation/wifi_animation_server.py unitree@192.168.0.123:~/
-scp -r ~/g1_ws/clips/ unitree@192.168.0.123:~/clips/
+scp ~/g1_ws/src/g1_animation/g1_animation/wifi_animation_server.py unitree@g1-orin.local:~/
+scp -r ~/g1_ws/clips/ unitree@g1-orin.local:~/clips/
 ```
 
 #### 7. Test-run the server
@@ -313,7 +385,7 @@ Press Ctrl+C to stop. The server is now installed and ready.
 ### Step 1 — Start the animation server on the Orin
 
 ```bash
-ssh unitree@192.168.0.123
+ssh unitree@g1-orin.local
 python3 ~/wifi_animation_server.py --interface eth0 --clips-dir ~/clips
 ```
 
@@ -335,7 +407,7 @@ ros2 run g1_animation wifi_cli
 ```
 
 ```
-Connecting to 192.168.0.123:9870...
+Connecting to g1-orin.local:9870...
 Connected. Available clips: arms, wave, typing, ...
 Commands: <clip_name> | stop | list | speed <value> | loop on/off | status | quit
 
@@ -360,8 +432,7 @@ status bar showing connection / current clip / latency.
 Start the local console server (no extra dependencies — pure stdlib):
 
 ```bash
-python3 ~/g1_ws/src/g1_animation/g1_animation/console_server.py \
-    --host 192.168.0.123
+python3 ~/g1_ws/src/g1_animation/g1_animation/console_server.py --host g1-orin.local
 ```
 
 A browser window opens automatically at **http://127.0.0.1:8080/**.
