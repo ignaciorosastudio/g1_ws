@@ -16,6 +16,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from unitree_sdk2py.core.channel import (
     ChannelPublisher,
@@ -130,8 +131,12 @@ class AnimationEngine:
         initial_positions=None,
         live_positions_fn=None,
         max_weight: float = 1.0,
+        clips_dir: Optional[Path] = None,
+        mode: str = "walking",
     ):
         self._clips = clips
+        self._clips_dir = clips_dir
+        self._mode = mode
         self._speed = 1.0
         self._loop = False
         self._playing = False
@@ -148,10 +153,28 @@ class AnimationEngine:
         self._weight_step = 1.0 / WEIGHT_RAMP_STEPS
         self._live_positions_fn = live_positions_fn
         self._lock = threading.Lock()
+        # Recording state
+        self._recording = False
+        self._record_buffer: list = []
+        self._record_name = ""
+        self._record_interval = 0.1
+        self._record_interp = "linear"
+        self._record_start_t = 0.0
+        self._record_thread: Optional[threading.Thread] = None
 
     @property
     def status(self) -> str:
+        if self._recording:
+            return f"recording:{self._record_name}"
         return self._current_clip or "idle"
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
+
+    @property
+    def clip_names(self) -> list:
+        return sorted(self._clips.keys())
 
     @property
     def weight(self) -> float:
@@ -240,6 +263,108 @@ class AnimationEngine:
     def set_loop(self, val: bool) -> str:
         self._loop = val
         return f"OK loop={'on' if val else 'off'}"
+
+    # -- Recording ------------------------------------------------------
+
+    def start_recording(self, name: str, interval: float, interp: str) -> str:
+        sanitized = name.strip().lower().replace(" ", "_")
+        if not sanitized or "/" in sanitized or ".." in sanitized:
+            return f"ERR invalid recording name '{name}'"
+        if not 0.005 <= interval <= 5.0:
+            return "ERR interval must be between 0.005 and 5.0 seconds"
+        if interp not in ("linear", "smoothstep", "catmull_rom"):
+            return f"ERR unknown interp '{interp}'"
+        if self._recording:
+            return "ERR already recording"
+        if self._playing:
+            return "ERR cannot record while playing — stop first"
+        if self._live_positions_fn is None:
+            return "ERR no robot state available"
+        if self._clips_dir is None:
+            return "ERR no clips directory configured"
+
+        with self._lock:
+            self._recording = True
+            self._record_name = sanitized
+            self._record_interval = interval
+            self._record_interp = interp
+            self._record_buffer = []
+            self._record_start_t = time.monotonic()
+            self._target_weight = 0.0
+        self._record_thread = threading.Thread(target=self._record_loop, daemon=True)
+        self._record_thread.start()
+        log.info("Recording started: %s @ %.3fs interval, %s",
+                 sanitized, interval, interp)
+        return f"OK Recording '{sanitized}' @ {1.0/interval:.1f}fps"
+
+    def _record_loop(self):
+        start = self._record_start_t
+        interval = self._record_interval
+        n = 0
+        while self._recording:
+            t = time.monotonic() - start
+            positions = self._live_positions_fn() if self._live_positions_fn else None
+            if positions is not None:
+                self._record_buffer.append(
+                    (round(t, 4), [round(p, 4) for p in positions])
+                )
+            n += 1
+            wait = (start + n * interval) - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+
+    def stop_capture(self) -> str:
+        """Stop capturing frames; keep the buffer for a subsequent save."""
+        if not self._recording:
+            return "ERR not recording"
+        with self._lock:
+            self._recording = False
+        if self._record_thread:
+            self._record_thread.join(timeout=2.0)
+        log.info("Capture stopped: %d frames buffered", len(self._record_buffer))
+        return f"OK Capture stopped ({len(self._record_buffer)} frames buffered)"
+
+    def save_recording(self) -> str:
+        """Write the buffered frames to disk."""
+        if self._recording:
+            return "ERR still capturing — stop first"
+        with self._lock:
+            buf = list(self._record_buffer)
+            name = self._record_name
+            interp = self._record_interp
+        if not buf:
+            return "ERR no frames to save"
+        if self._clips_dir is None:
+            return "ERR no clips directory configured"
+
+        keyframes = [{"time": t, "positions": pos} for t, pos in buf]
+        data = {"interp": interp, "keyframes": keyframes}
+        self._clips_dir.mkdir(parents=True, exist_ok=True)
+        out_path = self._clips_dir / f"{name}.json"
+        out_path.write_text(json.dumps(data, indent=2))
+
+        new_clips = load_clips(self._clips_dir)
+        self._clips = new_clips
+
+        with self._lock:
+            self._record_buffer = []
+
+        duration = buf[-1][0] if buf else 0.0
+        log.info("Saved recording '%s': %d frames over %.2fs → %s",
+                 name, len(buf), duration, out_path)
+        return f"OK Saved '{name}' ({len(buf)} frames, {duration:.2f}s)"
+
+    def cancel_recording(self) -> str:
+        """Stop capture (if running) and discard the buffer."""
+        if not self._recording and not self._record_buffer:
+            return "ERR nothing to cancel"
+        with self._lock:
+            self._recording = False
+            self._record_buffer = []
+        if self._record_thread:
+            self._record_thread.join(timeout=2.0)
+        log.info("Recording cancelled")
+        return "OK Recording cancelled"
 
     def tick(self):
         """Advance one 200 Hz step. Returns (positions, old_positions)."""
@@ -435,7 +560,10 @@ def control_loop(engine: AnimationEngine, bridge: DDSBridge):
     while _running:
         t0 = time.monotonic()
         positions, old_positions = engine.tick()
-        bridge.publish_cmd(positions, old_positions, engine.weight)
+        # While recording, the operator hand-poses the robot — don't fight
+        # them by publishing motor commands.
+        if not engine.recording:
+            bridge.publish_cmd(positions, old_positions, engine.weight)
         elapsed = time.monotonic() - t0
         time.sleep(max(0, CONTROL_DT - elapsed))
 
@@ -508,11 +636,42 @@ def dispatch(cmd: str, engine: AnimationEngine, clips: dict) -> str:
         return engine.set_loop(val)
 
     elif verb == "list":
-        names = sorted(clips.keys())
-        return "OK " + ",".join(names)
+        return "OK " + ",".join(engine.clip_names)
 
     elif verb == "status":
         return "OK " + engine.status
+
+    elif verb == "record" and len(parts) >= 2:
+        sub = parts[1].lower()
+        if sub == "start":
+            kwargs = {}
+            for arg in parts[2:]:
+                if "=" not in arg:
+                    return f"ERR bad record arg '{arg}' (expected key=value)"
+                k, v = arg.split("=", 1)
+                kwargs[k] = v
+            name = kwargs.get("name", "my_animation")
+            try:
+                interval = float(kwargs.get("interval", "0.1"))
+            except ValueError:
+                return f"ERR invalid interval '{kwargs.get('interval')}'"
+            interp = kwargs.get("interp", "linear")
+            resp = engine.start_recording(name, interval, interp)
+            log.info("record start → %s", resp)
+            return resp
+        if sub == "stop_capture":
+            resp = engine.stop_capture()
+            log.info("record stop_capture → %s", resp)
+            return resp
+        if sub == "save":
+            resp = engine.save_recording()
+            log.info("record save → %s", resp)
+            return resp
+        if sub == "cancel":
+            resp = engine.cancel_recording()
+            log.info("record cancel → %s", resp)
+            return resp
+        return f"ERR unknown record subcommand '{sub}'"
 
     else:
         return f"ERR unknown command: {cmd}"
@@ -589,6 +748,8 @@ def main():
         initial_positions=initial,
         live_positions_fn=bridge.get_initial_positions,
         max_weight=args.weight,
+        clips_dir=Path(args.clips_dir),
+        mode=args.mode,
     )
     log.info("Max arm_sdk weight = %.2f", args.weight)
 

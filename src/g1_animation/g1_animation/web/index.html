@@ -31,6 +31,39 @@
         <input id="speed" type="range" min="0.5" max="1.5" step="0.05" value="1.0">
         <button id="speed-reset" class="ghost" title="reset to 1.0×">reset</button>
       </div>
+      <button id="record-toggle" class="ghost record-toggle" title="Record a new clip">● Record</button>
+    </section>
+
+    <section id="record-panel" class="record-panel" hidden>
+      <div class="record-form" id="record-form">
+        <span class="record-label">RECORD NEW CLIP</span>
+        <label>
+          <span>name</span>
+          <input id="rec-name" type="text" value="my_animation" autocomplete="off">
+        </label>
+        <label>
+          <span>interval (s)</span>
+          <input id="rec-interval" type="number" value="0.1" min="0.01" max="2" step="0.01">
+        </label>
+        <label>
+          <span>interp</span>
+          <select id="rec-interp">
+            <option value="linear">linear</option>
+            <option value="smoothstep">smoothstep</option>
+            <option value="catmull_rom" selected>catmull_rom</option>
+          </select>
+        </label>
+        <button id="rec-start" class="record-start">Start</button>
+        <button id="rec-save"  class="record-stop" disabled>Save</button>
+        <button id="rec-exit"  class="ghost danger-btn">Exit</button>
+      </div>
+      <div class="record-active" id="record-active" hidden>
+        <span class="rec-dot"></span>
+        <span class="rec-status">REC</span>
+        <span class="rec-name-active" id="rec-name-active">—</span>
+        <span class="rec-elapsed" id="rec-elapsed">0:00.0</span>
+      </div>
+      <p id="rec-warning" class="warning" hidden></p>
     </section>
 
     <section id="grid" class="grid"></section>
@@ -38,6 +71,19 @@
     <p class="hint">
       Click a tile or press its key. <kbd>Space</kbd> = stop. <kbd>Enter</kbd> = fire closest cue.
     </p>
+
+    <section id="video-panel" class="video-panel" hidden>
+      <div class="video-header">
+        <span class="video-label">PREVIZ</span>
+        <span id="video-filename" class="video-filename"></span>
+        <span id="video-drift" class="video-drift"></span>
+        <button id="video-mute" class="ghost" title="Toggle audio">🔇</button>
+        <button id="video-hide" class="ghost" title="Collapse video">Hide</button>
+      </div>
+      <div class="video-stage" id="video-stage">
+        <video id="previz-video" preload="auto" muted playsinline></video>
+      </div>
+    </section>
 
     <section class="timeline-panel">
       <div class="transport">
@@ -58,6 +104,7 @@
           <input id="editmode" type="checkbox">
           <span>Edit</span>
         </label>
+        <button id="add-cue" class="ghost edit-only" title="Add a cue at the playhead" hidden>+ Add</button>
         <button id="reload-cues" class="ghost" title="Re-read cues from disk">Reload</button>
         <button id="save-cues" class="ghost save-btn" title="Write cues to disk" hidden>Save</button>
       </div>
@@ -74,6 +121,7 @@
         <span class="edit-time" id="edit-time">—</span>
         <input type="text" id="edit-clip"  placeholder="clip"  list="clip-list" autocomplete="off">
         <input type="text" id="edit-label" placeholder="label" autocomplete="off">
+        <button id="delete-cue" class="ghost danger-btn" title="Delete selected cue">Delete</button>
         <button id="edit-deselect" class="ghost" title="Deselect">×</button>
       </div>
       <datalist id="clip-list"></datalist>

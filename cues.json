@@ -3,35 +3,30 @@
   "duration": 60.0,
   "cues": [
     {
-      "t": 3.0,
+      "t": 3.016,
       "action": "play",
-      "clip": "wave",
-      "label": "wave"
+      "clip": "clip_001",
+      "label": "clip_001"
     },
     {
-      "t": 15.0,
+      "t": 5.998,
       "action": "play",
-      "clip": "arms",
-      "label": "arms"
+      "clip": "clip_001"
     },
     {
-      "t": 30.0,
-      "action": "stop",
-      "label": "stop"
+      "t": 9.048,
+      "action": "play",
+      "clip": "clip_001"
     },
     {
-      "t": 35.5,
+      "t": 11.997,
       "action": "play",
-      "clip": "typing",
-      "label": "typing",
-      "speed": 0.8
+      "clip": "clip_001"
     },
     {
-      "t": 50.0,
+      "t": 14.979,
       "action": "play",
-      "clip": "roemmers",
-      "label": "roemmers",
-      "preroll": 0.3
+      "clip": "clip_001"
     }
   ]
 }

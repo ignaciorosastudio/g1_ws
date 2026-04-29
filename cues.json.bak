@@ -1,38 +1,37 @@
 {
-    "name": "Demo cue list",
-    "duration": 60.0,
-    "cues": [
-        {
-            "t": 3.0,
-            "action": "play",
-            "clip": "wave",
-            "label": "wave"
-        },
-        {
-            "t": 15.0,
-            "action": "play",
-            "clip": "arms",
-            "label": "wave"
-        },
-        {
-            "t": 30.0,
-            "action": "stop",
-            "label": "stop"
-        },
-        {
-            "t": 35.5,
-            "action": "play",
-            "clip": "typing",
-            "label": "typing",
-            "speed": 0.8
-        },
-        {
-            "t": 50.0,
-            "action": "play",
-            "clip": "roemmers",
-            "label": "roemmers",
-            "preroll": 0.3
-        }
-    ],
-    "path": "/tmp/test_cues.json"
+  "name": "Demo cue list",
+  "duration": 60.0,
+  "cues": [
+    {
+      "t": 3.0,
+      "action": "play",
+      "clip": "wave",
+      "label": "wave"
+    },
+    {
+      "t": 15.0,
+      "action": "play",
+      "clip": "arms",
+      "label": "arms"
+    },
+    {
+      "t": 30.0,
+      "action": "stop",
+      "label": "stop"
+    },
+    {
+      "t": 35.5,
+      "action": "play",
+      "clip": "typing",
+      "label": "typing",
+      "speed": 0.8
+    },
+    {
+      "t": 50.0,
+      "action": "play",
+      "clip": "roemmers",
+      "label": "roemmers",
+      "preroll": 0.3
+    }
+  ]
 }

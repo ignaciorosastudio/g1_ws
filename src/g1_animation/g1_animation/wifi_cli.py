@@ -5,7 +5,7 @@ WiFi animation CLI — thin TCP client for the Orin animation server.
 No ROS2 or SDK2 dependencies. Can run from any machine on the WiFi network.
 
 Usage:
-    python3 wifi_cli.py --host 192.168.0.123
+    python3 wifi_cli.py --host g1-orin.local
     ros2 run g1_animation wifi_cli          # if installed as ROS2 entry point
 """
 import argparse
@@ -37,8 +37,8 @@ def send_cmd(sock: socket.socket, cmd: str) -> str:
 
 def main(args=None):
     parser = argparse.ArgumentParser(description="WiFi animation CLI")
-    parser.add_argument("--host", default="192.168.0.123",
-                        help="Animation server host (default: 192.168.0.123)")
+    parser.add_argument("--host", default="g1-orin.local",
+                        help="Animation server host (default: g1-orin.local)")
     parser.add_argument("--port", type=int, default=PORT,
                         help=f"Animation server port (default: {PORT})")
     parsed = parser.parse_args(args)

@@ -14,7 +14,7 @@ and exposes:
     POST /api/speed {value} — set playback speed multiplier
 
 Usage:
-    python3 console_server.py --host 192.168.0.123
+    python3 console_server.py --host g1-orin.local
     open http://127.0.0.1:8080/
 """
 import argparse
@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-DEFAULT_ORIN_HOST = "192.168.0.123"
+DEFAULT_ORIN_HOST = "g1-orin.local"
 DEFAULT_ORIN_PORT = 9870
 DEFAULT_HTTP_PORT = 8080
 DEFAULT_CUES_PATH = Path.home() / "g1_ws" / "cues.json"
@@ -164,6 +164,18 @@ class OrinClient:
             self._mark_disconnected(e)
             raise
 
+    def refresh_clips(self):
+        """Re-fetch the clip list from the Orin and broadcast the snapshot.
+        Used after `record stop` so the new clip shows up as a tile."""
+        try:
+            resp = self._raw_send("list")
+        except ConnectionError as e:
+            self._mark_disconnected(e)
+            return
+        if resp.startswith("OK "):
+            self._clips = sorted(c for c in resp[3:].split(",") if c)
+            self._broadcast(self.snapshot())
+
     # -- internals ------------------------------------------------------
 
     def _broadcast(self, msg: dict):
@@ -253,6 +265,7 @@ class OrinClient:
 
 CLIENT: OrinClient  # set in main()
 CUES_PATH: Path     # set in main()
+VIDEO_PATH: Path | None = None  # set in main(); None disables /api/video
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -304,6 +317,12 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/cues":
             self._send_json(200, load_cues(CUES_PATH))
             return
+        if url.path == "/api/video":
+            self._handle_video()
+            return
+        if url.path == "/api/video/info":
+            self._send_json(200, self._video_info())
+            return
         rel = url.path.lstrip("/") or "index.html"
         target = (WEB_DIR / rel).resolve()
         try:
@@ -340,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
 
         ok = resp.startswith("OK")
         msg = resp.removeprefix("OK ").removeprefix("ERR ")
+        if ok and url.path == "/api/record/save":
+            CLIENT.refresh_clips()
         self._send_json(200 if ok else 400, {"ok": ok, "msg": msg, "raw": resp})
 
     def _handle_save_cues(self, data):
@@ -402,7 +423,95 @@ class Handler(BaseHTTPRequestHandler):
             if v <= 0 or v > 10:
                 return None
             return f"speed {v}"
+        if path == "/api/record/start":
+            name = str(data.get("name", "")).strip()
+            if not name or any(c.isspace() for c in name) or "/" in name:
+                return None
+            try:
+                interval = float(data.get("interval", 0.1))
+            except (TypeError, ValueError):
+                return None
+            interp = str(data.get("interp", "linear"))
+            if interp not in ("linear", "smoothstep", "catmull_rom"):
+                return None
+            return f"record start name={name} interval={interval} interp={interp}"
+        if path == "/api/record/stop_capture":
+            return "record stop_capture"
+        if path == "/api/record/save":
+            return "record save"
+        if path == "/api/record/cancel":
+            return "record cancel"
         return None
+
+    # ---- Video (Range-aware static serve) ----------------------------
+
+    _VIDEO_CT = {
+        ".mp4":  "video/mp4",
+        ".m4v":  "video/mp4",
+        ".webm": "video/webm",
+        ".ogv":  "video/ogg",
+        ".mov":  "video/quicktime",
+    }
+
+    def _video_info(self) -> dict:
+        if VIDEO_PATH is None:
+            return {"available": False}
+        if not VIDEO_PATH.is_file():
+            return {"available": False, "error": f"file not found: {VIDEO_PATH}"}
+        return {
+            "available": True,
+            "url": "/api/video",
+            "filename": VIDEO_PATH.name,
+            "size": VIDEO_PATH.stat().st_size,
+        }
+
+    def _handle_video(self):
+        if VIDEO_PATH is None or not VIDEO_PATH.is_file():
+            self.send_error(404, "video not configured")
+            return
+        size = VIDEO_PATH.stat().st_size
+        ct = self._VIDEO_CT.get(VIDEO_PATH.suffix.lower(), "application/octet-stream")
+        rng = self.headers.get("Range")
+        start, end = 0, size - 1
+        partial = False
+        if rng and rng.startswith("bytes="):
+            try:
+                spec = rng[len("bytes="):].split(",", 1)[0].strip()
+                a, b = spec.split("-", 1)
+                if a:
+                    start = int(a)
+                if b:
+                    end = int(b)
+                if start < 0 or end >= size or start > end:
+                    raise ValueError
+                partial = True
+            except ValueError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+
+        length = end - start + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            with VIDEO_PATH.open("rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _handle_sse(self):
         self.send_response(200)
@@ -430,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global CLIENT, CUES_PATH
+    global CLIENT, CUES_PATH, VIDEO_PATH
 
     parser = argparse.ArgumentParser(description="G1 console server")
     parser.add_argument("--host", default=DEFAULT_ORIN_HOST,
@@ -445,6 +554,9 @@ def main():
                         help="Don't open a browser window on startup")
     parser.add_argument("--cues", default=str(DEFAULT_CUES_PATH),
                         help=f"Path to cue list JSON (default: {DEFAULT_CUES_PATH})")
+    parser.add_argument("--video", default=None,
+                        help="Path to a video file (mp4/webm) to preview "
+                             "alongside the timeline. Optional.")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -458,6 +570,15 @@ def main():
 
     CUES_PATH = Path(args.cues).expanduser()
     log.info("Cues path:    %s", CUES_PATH)
+
+    if args.video:
+        VIDEO_PATH = Path(args.video).expanduser()
+        if VIDEO_PATH.is_file():
+            log.info("Video preview: %s (%.1f MB)",
+                     VIDEO_PATH, VIDEO_PATH.stat().st_size / 1e6)
+        else:
+            log.warning("Video file not found: %s — /api/video disabled", VIDEO_PATH)
+            VIDEO_PATH = None
 
     CLIENT = OrinClient(args.host, args.port)
     CLIENT.start()

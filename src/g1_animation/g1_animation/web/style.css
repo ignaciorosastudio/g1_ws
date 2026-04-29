@@ -239,6 +239,57 @@ main {
   font-size: 11px;
 }
 
+/* ==== Video previz ===================================================== */
+
+.video-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.video-panel[hidden] { display: none; }
+
+.video-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.video-label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.video-filename {
+  color: var(--text);
+  font-style: italic;
+}
+.video-drift {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.video-drift.warn { color: var(--warn); }
+
+.video-stage {
+  background: black;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  max-height: 340px;
+}
+.video-stage video {
+  max-width: 100%;
+  max-height: 340px;
+  display: block;
+}
+.video-panel.collapsed .video-stage { display: none; }
+
 /* ==== Timeline panel =================================================== */
 
 .timeline-panel {
@@ -443,6 +494,132 @@ main {
   border-color: var(--danger);
 }
 .editmode-label input { accent-color: var(--danger); }
+
+/* ==== Record panel ===================================================== */
+
+.record-toggle {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.record-toggle.recording {
+  background: var(--danger);
+  color: white;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+.record-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.record-panel[hidden] { display: none; }
+.record-panel.recording { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
+
+.record-form,
+.record-active {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.record-label {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.record-form label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.record-form input,
+.record-form select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 13px;
+  min-width: 80px;
+}
+.record-form input[type=number] { width: 90px; }
+.record-form input:focus,
+.record-form select:focus { border-color: var(--danger); outline: none; }
+.record-form input:disabled,
+.record-form select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.record-start {
+  background: var(--danger);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.record-start:hover  { filter: brightness(1.1); }
+.record-start:active { transform: translateY(1px); }
+
+.record-stop {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.record-stop:hover { filter: brightness(1.1); }
+.record-stop:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.record-active .rec-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+.record-active .rec-status {
+  color: var(--danger);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+.record-active .rec-name-active {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.record-active .rec-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.danger-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.danger-btn:hover {
+  background: var(--danger);
+  color: var(--bg);
+  border-color: var(--danger);
+}
 
 .save-btn {
   border-color: var(--accent);
